@@ -12,11 +12,12 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, ensureFirebaseAuth } from './firebase';
 import { StorageService } from './storageService';
-import { Post, Comment, User, ChatMessage } from '../types';
+import { Post, Comment, User, ChatMessage, AppNotification } from '../types';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const MESSAGES_COLLECTION = 'messages';
+const NOTIFICATIONS_COLLECTION = 'notifications';
 const LOCAL_POSTS_CACHE_KEY = 'workplace_firebase_posts_cache_v3';
 
 /**
@@ -63,17 +64,33 @@ export class FirestoreService {
             return;
           }
 
-          // Ensure arrays and default values
+          // Ensure arrays and default values with robust fallbacks
           posts.push({
             ...data,
             id: docSnap.id,
+            authorId: data.authorId || 'usr-anonymous',
+            authorUsername: data.authorUsername || (data as any).username || 'karyawan',
+            authorName: data.authorName || data.authorUsername || 'Karyawan ECI',
+            authorAvatar: data.authorAvatar || '',
+            authorDepartment: data.authorDepartment || 'Semua Departemen',
+            authorRole: data.authorRole || 'Staf',
+            targetDepartment: data.targetDepartment || 'Semua Departemen',
+            category: data.category || 'Regular/Information Only',
+            title: data.title || undefined,
+            content: data.content || '',
             upvotedBy: data.upvotedBy || [],
             upvotesCount: data.upvotesCount ?? (data.upvotedBy?.length || 0),
-            comments: data.comments || [],
+            comments: (data.comments || []).map((c: any) => ({
+              ...c,
+              authorUsername: c.authorUsername || 'karyawan',
+              authorName: c.authorName || 'Karyawan ECI',
+              content: c.content || '',
+            })),
             commentsCount: data.commentsCount ?? (data.comments?.length || 0),
             tags: data.tags || [],
             mentions: data.mentions || [],
             imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
+            recommendationScore: data.recommendationScore ?? 15,
           });
         });
 
@@ -109,7 +126,32 @@ export class FirestoreService {
       const cached = localStorage.getItem(LOCAL_POSTS_CACHE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        return parsed.filter((p: Post) => !['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id));
+        return parsed
+          .filter((p: Post) => !['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id))
+          .map((p: any) => ({
+            ...p,
+            authorId: p.authorId || 'usr-anonymous',
+            authorUsername: p.authorUsername || p.username || 'karyawan',
+            authorName: p.authorName || p.authorUsername || 'Karyawan ECI',
+            authorAvatar: p.authorAvatar || '',
+            authorDepartment: p.authorDepartment || 'Semua Departemen',
+            authorRole: p.authorRole || 'Staf',
+            targetDepartment: p.targetDepartment || 'Semua Departemen',
+            category: p.category || 'Regular/Information Only',
+            title: p.title || undefined,
+            content: p.content || '',
+            tags: p.tags || [],
+            mentions: p.mentions || [],
+            upvotesCount: p.upvotesCount || 0,
+            upvotedBy: p.upvotedBy || [],
+            commentsCount: p.commentsCount || 0,
+            comments: (p.comments || []).map((c: any) => ({
+              ...c,
+              authorUsername: c.authorUsername || 'karyawan',
+              authorName: c.authorName || 'Karyawan ECI',
+              content: c.content || '',
+            })),
+          }));
       }
     } catch {
       // ignore
@@ -306,16 +348,22 @@ export class FirestoreService {
   }
 
   /**
-   * Save a chat message in Firestore
+   * Save a chat message in Firestore and local storage
    */
   static async saveChatMessage(msg: ChatMessage): Promise<void> {
     try {
       await ensureFirebaseAuth();
       const msgRef = doc(db, MESSAGES_COLLECTION, msg.id);
-      const clean = sanitizeForFirestore(msg);
-      await setDoc(msgRef, clean);
+      const clean = sanitizeForFirestore({
+        ...msg,
+        createdAt: msg.createdAt || Date.now(),
+        read: Boolean(msg.read),
+      });
+      await setDoc(msgRef, clean, { merge: true });
+      StorageService.mergeChatMessages([msg]);
     } catch (error) {
       console.warn('Firestore saveChatMessage error:', error);
+      StorageService.mergeChatMessages([msg]);
     }
   }
 
@@ -325,27 +373,53 @@ export class FirestoreService {
   static subscribeToChatMessages(
     userId1: string,
     userId2: string,
+    user1Username: string | undefined,
+    user2Username: string | undefined,
     onMessagesUpdate: (msgs: ChatMessage[]) => void
   ): () => void {
     ensureFirebaseAuth().catch(() => {});
 
-    const msgsQuery = query(collection(db, MESSAGES_COLLECTION), orderBy('timestamp', 'asc'));
+    // Query messages collection without restrictive orderBy so no docs are dropped
+    const msgsQuery = query(collection(db, MESSAGES_COLLECTION));
+    const u1U = (user1Username || '').toLowerCase();
+    const u2U = (user2Username || '').toLowerCase();
+
     const unsubscribe = onSnapshot(
       msgsQuery,
       (snapshot) => {
         const relevant: ChatMessage[] = [];
         snapshot.forEach((docSnap) => {
-          const m = docSnap.data() as ChatMessage;
-          const isMatch =
-            (m.senderId === userId1 && m.recipientId === userId2) ||
-            (m.senderId === userId2 && m.recipientId === userId1);
-          if (isMatch) {
-            relevant.push({ ...m, id: docSnap.id });
+          const m = docSnap.data() as any;
+          const sId = m.senderId;
+          const rId = m.recipientId;
+          const sU = (m.senderUsername || '').toLowerCase();
+          const rU = (m.recipientUsername || '').toLowerCase();
+
+          const match1to2 =
+            (sId === userId1 || (Boolean(u1U && sU) && sU === u1U)) &&
+            (rId === userId2 || (Boolean(u2U && rU) && rU === u2U));
+          const match2to1 =
+            (sId === userId2 || (Boolean(u2U && sU) && sU === u2U)) &&
+            (rId === userId1 || (Boolean(u1U && rU) && rU === u1U));
+
+          if (match1to2 || match2to1) {
+            relevant.push({
+              id: docSnap.id,
+              senderId: sId || '',
+              senderUsername: m.senderUsername || '',
+              senderName: m.senderName || 'Rekan Kerja',
+              recipientId: rId || '',
+              recipientUsername: m.recipientUsername || '',
+              content: m.content || '',
+              createdAt: Number(m.createdAt || m.timestamp || Date.now()),
+              read: Boolean(m.read || m.isRead),
+            });
           }
         });
-        if (relevant.length > 0) {
-          onMessagesUpdate(relevant);
-        }
+
+        relevant.sort((a, b) => a.createdAt - b.createdAt);
+        StorageService.mergeChatMessages(relevant);
+        onMessagesUpdate(relevant);
       },
       (err) => {
         console.warn('Firestore messages subscription status:', err);
@@ -353,6 +427,178 @@ export class FirestoreService {
     );
 
     return unsubscribe;
+  }
+
+  /**
+   * Mark all messages between user and peer as read
+   */
+  static async markChatMessagesAsRead(myId: string, peerId: string): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      const q = query(collection(db, MESSAGES_COLLECTION));
+      const snap = await getDocs(q);
+      const updates: Promise<void>[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        if (data.recipientId === myId && data.senderId === peerId && !data.read) {
+          updates.push(updateDoc(doc(db, MESSAGES_COLLECTION, d.id), { read: true }));
+        }
+      });
+      await Promise.all(updates);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Subscribe to all messages where user is sender or recipient (for unread badges)
+   */
+  static subscribeToUserMessages(
+    myId: string,
+    myUsername: string,
+    onMessagesUpdate: (msgs: ChatMessage[]) => void
+  ): () => void {
+    ensureFirebaseAuth().catch(() => {});
+    const msgsQuery = query(collection(db, MESSAGES_COLLECTION));
+    const myU = (myUsername || '').toLowerCase();
+
+    return onSnapshot(
+      msgsQuery,
+      (snapshot) => {
+        const relevant: ChatMessage[] = [];
+        snapshot.forEach((docSnap) => {
+          const m = docSnap.data() as any;
+          const sU = (m.senderUsername || '').toLowerCase();
+          const rU = (m.recipientUsername || '').toLowerCase();
+          const isRelated =
+            m.senderId === myId ||
+            m.recipientId === myId ||
+            (Boolean(myU && sU) && sU === myU) ||
+            (Boolean(myU && rU) && rU === myU);
+
+          if (isRelated) {
+            relevant.push({
+              id: docSnap.id,
+              senderId: m.senderId || '',
+              senderUsername: m.senderUsername || '',
+              senderName: m.senderName || 'Rekan Kerja',
+              recipientId: m.recipientId || '',
+              recipientUsername: m.recipientUsername || '',
+              content: m.content || '',
+              createdAt: Number(m.createdAt || m.timestamp || Date.now()),
+              read: Boolean(m.read || m.isRead),
+            });
+          }
+        });
+        StorageService.mergeChatMessages(relevant);
+        onMessagesUpdate(relevant);
+      },
+      (err) => {
+        console.warn('User messages subscription error:', err);
+      }
+    );
+  }
+
+  // ==================== NOTIFICATIONS ====================
+
+  /**
+   * Save a mention or activity notification to Firestore & localStorage
+   */
+  static async saveNotification(notification: AppNotification): Promise<void> {
+    try {
+      StorageService.saveNotification(notification);
+      await ensureFirebaseAuth();
+      const notifRef = doc(db, NOTIFICATIONS_COLLECTION, notification.id);
+      const clean = sanitizeForFirestore(notification);
+      await setDoc(notifRef, clean);
+    } catch (error) {
+      console.warn('Firestore saveNotification error:', error);
+    }
+  }
+
+  /**
+   * Real-time subscription to notifications targeted at a specific username
+   */
+  static subscribeToUserNotifications(
+    username: string,
+    onNotificationsUpdate: (notifs: AppNotification[]) => void
+  ): () => void {
+    ensureFirebaseAuth().catch(() => {});
+    const cleanU = (username || '').trim().toLowerCase().replace(/^@/, '');
+    if (!cleanU) return () => {};
+
+    const notifQuery = query(collection(db, NOTIFICATIONS_COLLECTION));
+    return onSnapshot(
+      notifQuery,
+      (snapshot) => {
+        const relevant: AppNotification[] = [];
+        snapshot.forEach((docSnap) => {
+          const n = docSnap.data() as any;
+          const targetU = (n.recipientUsername || '').toLowerCase().replace(/^@/, '');
+          if (targetU === cleanU) {
+            relevant.push({
+              id: docSnap.id,
+              recipientUsername: targetU,
+              recipientId: n.recipientId,
+              type: n.type || 'mention_post',
+              senderUsername: n.senderUsername || 'rekan',
+              senderName: n.senderName || 'Rekan Kerja',
+              senderAvatar: n.senderAvatar || '',
+              postId: n.postId,
+              postTitle: n.postTitle,
+              commentId: n.commentId,
+              snippet: n.snippet || '',
+              createdAt: Number(n.createdAt || Date.now()),
+              read: Boolean(n.read),
+            });
+          }
+        });
+
+        relevant.sort((a, b) => b.createdAt - a.createdAt);
+        StorageService.mergeNotifications(relevant);
+        onNotificationsUpdate(relevant);
+      },
+      (err) => {
+        console.warn('Firestore notifications subscription status:', err);
+      }
+    );
+  }
+
+  /**
+   * Mark a single notification as read
+   */
+  static async markNotificationAsRead(notifId: string): Promise<void> {
+    try {
+      StorageService.markNotificationAsRead(notifId);
+      await ensureFirebaseAuth();
+      const ref = doc(db, NOTIFICATIONS_COLLECTION, notifId);
+      await updateDoc(ref, { read: true });
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Mark all notifications for a username as read
+   */
+  static async markAllNotificationsAsRead(username: string): Promise<void> {
+    try {
+      StorageService.markAllNotificationsAsRead(username);
+      await ensureFirebaseAuth();
+      const cleanU = (username || '').trim().toLowerCase().replace(/^@/, '');
+      const q = query(collection(db, NOTIFICATIONS_COLLECTION));
+      const snap = await getDocs(q);
+      const updates: Promise<void>[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        if ((data.recipientUsername || '').toLowerCase() === cleanU && !data.read) {
+          updates.push(updateDoc(doc(db, NOTIFICATIONS_COLLECTION, d.id), { read: true }));
+        }
+      });
+      await Promise.all(updates);
+    } catch {
+      // ignore
+    }
   }
 
   /**

@@ -54,15 +54,39 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
   // Load chat messages between currentUser and selectedUser
   useEffect(() => {
     if (currentUser && selectedUser) {
-      const msgs = StorageService.getChatMessages(currentUser.id, selectedUser.id);
+      // 1. Load initial cached messages
+      const msgs = StorageService.getChatMessages(
+        currentUser.id,
+        selectedUser.id,
+        currentUser.username,
+        selectedUser.username
+      );
       setMessages(msgs);
 
-      // Subscribe to real-time chat messages in Firestore
+      // 2. Mark incoming messages as read
+      StorageService.markChatMessagesAsRead(
+        currentUser.id,
+        currentUser.username,
+        selectedUser.id,
+        selectedUser.username
+      );
+      FirestoreService.markChatMessagesAsRead(currentUser.id, selectedUser.id);
+
+      // 3. Subscribe to real-time chat messages in Firestore
       const unsubscribe = FirestoreService.subscribeToChatMessages(
         currentUser.id,
         selectedUser.id,
+        currentUser.username,
+        selectedUser.username,
         (liveMsgs) => {
           setMessages(liveMsgs);
+          StorageService.markChatMessagesAsRead(
+            currentUser.id,
+            currentUser.username,
+            selectedUser.id,
+            selectedUser.username
+          );
+          FirestoreService.markChatMessagesAsRead(currentUser.id, selectedUser.id);
         }
       );
 
@@ -78,38 +102,31 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
 
   if (!isOpen || !currentUser) return null;
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() || !selectedUser) return;
 
-    const newMsg = StorageService.sendChatMessage({
+    const content = inputText.trim();
+    setInputText('');
+
+    const newMsg: ChatMessage = {
+      id: `chat-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       senderId: currentUser.id,
       senderUsername: currentUser.username,
       senderName: currentUser.fullName,
       recipientId: selectedUser.id,
       recipientUsername: selectedUser.username,
-      content: inputText.trim(),
-    });
+      content,
+      createdAt: Date.now(),
+      read: false,
+    };
 
-    // Sync message to Firestore
-    FirestoreService.saveChatMessage(newMsg).catch(() => {});
-
+    // Optimistically update state and local cache
     setMessages((prev) => [...prev, newMsg]);
-    setInputText('');
+    StorageService.sendChatMessage(newMsg);
 
-    // Optional simulated reply from colleague after 1.5s
-    setTimeout(() => {
-      const reply = StorageService.sendChatMessage({
-        senderId: selectedUser.id,
-        senderUsername: selectedUser.username,
-        senderName: selectedUser.fullName,
-        recipientId: currentUser.id,
-        recipientUsername: currentUser.username,
-        content: `Halo ${currentUser.fullName}! Terima kasih sudah menghubungi divisi ${selectedUser.department}. Pesan Anda telah kami terima dan akan segera kami follow up.`,
-      });
-      FirestoreService.saveChatMessage(reply).catch(() => {});
-      setMessages((prev) => [...prev, reply]);
-    }, 1500);
+    // Persist to Firestore for real-time delivery to recipient
+    await FirestoreService.saveChatMessage(newMsg);
   };
 
   return (
@@ -156,6 +173,19 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
             ) : (
               availableColleagues.map((user) => {
                 const isSelected = selectedUser?.id === user.id;
+                const unreadFromUser = StorageService.getChatMessages(
+                  currentUser.id,
+                  user.id,
+                  currentUser.username,
+                  user.username
+                ).filter(
+                  (m) =>
+                    (m.recipientId === currentUser.id ||
+                      (currentUser.username &&
+                        m.recipientUsername?.toLowerCase() === currentUser.username.toLowerCase())) &&
+                    !m.read
+                ).length;
+
                 return (
                   <button
                     key={user.id}
@@ -175,8 +205,15 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs font-medium text-zinc-900 truncate">
-                        {user.fullName}
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-medium text-zinc-900 truncate">
+                          {user.fullName}
+                        </span>
+                        {unreadFromUser > 0 && (
+                          <span className="shrink-0 px-1.5 py-0.2 rounded-full bg-[#1877F2] text-white text-[10px] font-bold">
+                            {unreadFromUser}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[10px] text-zinc-400 font-mono truncate">
                         @{user.username}
@@ -208,10 +245,15 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
                     <h4 className="text-xs font-semibold text-zinc-900">
                       {selectedUser.fullName}
                     </h4>
-                    <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-                      <span className="font-mono text-zinc-600">@{selectedUser.username}</span>
+                    <div className="flex items-center gap-1.5 text-[11px] text-zinc-500 flex-wrap">
+                      <span className="font-mono text-[#1877F2]">@{selectedUser.username}</span>
                       <span>•</span>
                       <span>{selectedUser.department}</span>
+                      <span>•</span>
+                      <span className="inline-flex items-center gap-1 text-emerald-600 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Terkoneksi
+                      </span>
                     </div>
                   </div>
                 </div>
