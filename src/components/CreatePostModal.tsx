@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { Department, PostCategory, Post } from '../types';
 import { StorageService } from '../services/storageService';
 import { FirestoreService } from '../services/firestoreService';
+import { compressPostImage } from '../utils/avatarUtils';
 import {
   X,
   Send,
@@ -148,34 +149,32 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
   );
 
   // Multi-File Upload Handlers (Drag & Drop + Click File Picker)
-  const processFiles = (files: FileList | File[]) => {
+  const processFiles = async (files: FileList | File[]) => {
     const fileList = Array.from(files);
     let hasInvalid = false;
     let hasOversized = false;
 
-    fileList.forEach((file) => {
+    for (const file of fileList) {
       if (!file.type.startsWith('image/')) {
         hasInvalid = true;
-        return;
+        continue;
       }
-      if (file.size > 8 * 1024 * 1024) {
+      if (file.size > 12 * 1024 * 1024) {
         hasOversized = true;
-        return;
+        continue;
       }
 
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (typeof event.target?.result === 'string') {
-          const res = event.target.result;
-          setImageUrls((prev) => [...prev, res]);
-          setErrorMessage('');
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+      try {
+        const compressed = await compressPostImage(file, 1200, 0.82);
+        setImageUrls((prev) => [...prev, compressed]);
+        setErrorMessage('');
+      } catch (err: any) {
+        console.warn('Post image processing error:', err);
+      }
+    }
 
     if (hasInvalid) setErrorMessage('Beberapa file dilewati karena bukan file gambar valid.');
-    if (hasOversized) setErrorMessage('Beberapa foto dilewati karena melebihi 8MB.');
+    if (hasOversized) setErrorMessage('Beberapa foto dilewati karena melebihi 12MB.');
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
