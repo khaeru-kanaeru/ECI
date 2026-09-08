@@ -207,47 +207,16 @@ export class FirestoreService {
     } catch (e) {
       console.warn('Local addComment warning:', e);
     }
-
-    // 2. Cloud update
-    try {
-      await ensureFirebaseAuth();
-      const cleanComment = sanitizeForFirestore(comment);
-      const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
-      await setDoc(commentRef, cleanComment);
-
-      const postRef = doc(db, POSTS_COLLECTION, postId);
-      const snapshot = await getDocs(query(collection(db, POSTS_COLLECTION)));
-      const postDoc = snapshot.docs.find((d) => d.id === postId);
-      if (postDoc) {
-        const data = postDoc.data() as Post;
-      await setDoc(commentRef, cleanComment);
-
-      const postRef = doc(db, POSTS_COLLECTION, postId);
-      const postSnap = await getDoc(postRef);
-      if (postSnap.exists()) {
-        const data = postSnap.data() as Post;
-        const currentComments = data.comments || [];
-        const updatedComments = [...currentComments, cleanComment as Comment];
-
-        await updateDoc(postRef, {
-          comments: updatedComments,
-          commentsCount: updatedComments.length,
-          updatedAt: Date.now(),
-        });
-      }
-    } catch (error) {
-      console.warn('Firestore addComment cloud sync error:', (error as any)?.message);
-      try {
-        handleFirestoreError(error, OperationType.CREATE, `${POSTS_COLLECTION}/${postId}/comments/${comment.id}`);
-      } catch {
-        // Handled
-      }
-    }
+export const addComment = async (postId: string, comment: any) => {
+  try {
+    const cleanComment = sanitizeForFirestore(comment);
+    const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
+    await setDoc(commentRef, cleanComment);
+  } catch (error) {
+    console.warn('Firestore addComment cloud sync error:', (error as any)?.message);
   }
-
-  /**
-   * Delete post
-   */
+};
+    
   static async deletePost(postId: string): Promise<void> {
     // 1. Local update
     try {
