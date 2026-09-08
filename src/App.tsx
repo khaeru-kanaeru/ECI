@@ -28,7 +28,7 @@ import {
 const MainWorkplaceFeed: React.FC = () => {
   const { currentUser, requireAuth, openAuthModal } = useAuth();
 
-  const [posts, setPosts] = useState<Post[]>([]);
+  const [posts, setPosts] = useState<Post[]>(() => FirestoreService.getCachedPosts());
   const [selectedDepartment, setSelectedDepartment] = useState<Department>('Semua Departemen');
   const [sortBy, setSortBy] = useState<'recommendation' | 'latest' | 'most-commented'>('recommendation');
   const [searchQuery, setSearchQuery] = useState('');
