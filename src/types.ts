@@ -86,6 +86,24 @@ export interface ChatMessage {
   read: boolean;
 }
 
+export type NotificationType = 'mention_post' | 'mention_comment' | 'chat_message';
+
+export interface AppNotification {
+  id: string;
+  recipientUsername: string;
+  recipientId?: string;
+  type: NotificationType;
+  senderUsername: string;
+  senderName: string;
+  senderAvatar: string;
+  postId?: string;
+  postTitle?: string;
+  commentId?: string;
+  snippet: string;
+  createdAt: number;
+  read: boolean;
+}
+
 export interface QuotaStats {
   totalPostsInSystem: number;
   totalCachedLocally: number;

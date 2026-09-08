@@ -1,10 +1,11 @@
-import { Post, User, Comment, ChatMessage, QuotaStats } from '../types';
+import { Post, User, Comment, ChatMessage, AppNotification, QuotaStats } from '../types';
 import { INITIAL_POSTS, INITIAL_USERS } from '../data/initialData';
 import { generateInitialsAvatar } from '../utils/avatarUtils';
 
 const POSTS_STORAGE_KEY = 'enterprise_network_posts_clean_v3';
 const USERS_STORAGE_KEY = 'enterprise_network_users_v2';
 const CHATS_STORAGE_KEY = 'enterprise_network_chats_v2';
+const NOTIFICATIONS_STORAGE_KEY = 'enterprise_network_notifications_v1';
 const QUOTA_STORAGE_KEY = 'enterprise_network_quota_v2';
 const LAST_SYNC_KEY = 'enterprise_network_last_sync_v2';
 
@@ -169,16 +170,36 @@ export class StorageService {
       const posts = rawPosts.filter(
         (p) =>
           !['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id) &&
-          !p.id.startsWith('archive-post-') &&
-          !p.id.startsWith('post-')
+          !p.id.startsWith('archive-post-')
       );
 
       // Update Quota Saver stats on each read from local cache
       this.recordCacheRead(posts.length);
       
-      // Sort and recalculate recommendation score
+      // Sort, sanitize fields, and recalculate recommendation score
       return posts.map(p => ({
         ...p,
+        authorId: p.authorId || 'usr-anonymous',
+        authorUsername: p.authorUsername || (p as any).username || 'karyawan',
+        authorName: p.authorName || p.authorUsername || 'Karyawan ECI',
+        authorAvatar: p.authorAvatar || '',
+        authorDepartment: p.authorDepartment || 'Semua Departemen',
+        authorRole: p.authorRole || 'Staf',
+        targetDepartment: p.targetDepartment || 'Semua Departemen',
+        category: p.category || 'Regular/Information Only',
+        title: p.title || undefined,
+        content: p.content || '',
+        tags: p.tags || [],
+        mentions: p.mentions || [],
+        upvotesCount: p.upvotesCount || 0,
+        upvotedBy: p.upvotedBy || [],
+        commentsCount: p.commentsCount || 0,
+        comments: (p.comments || []).map((c: any) => ({
+          ...c,
+          authorUsername: c.authorUsername || 'karyawan',
+          authorName: c.authorName || 'Karyawan ECI',
+          content: c.content || '',
+        })),
         recommendationScore: this.calculateRecommendationScore(p)
       }));
     } catch {
@@ -302,7 +323,11 @@ export class StorageService {
       const posts = this.getPosts();
       let changed = false;
       const updatedPosts = posts.map((p) => {
-        if (p.authorId === userId || p.authorUsername.toLowerCase() === updated.username.toLowerCase()) {
+        if (
+          p.authorId === userId ||
+          (Boolean(p.authorUsername && updated.username) &&
+            p.authorUsername.toLowerCase() === updated.username.toLowerCase())
+        ) {
           changed = true;
           return {
             ...p,
@@ -412,15 +437,33 @@ export class StorageService {
   }
 
   // CHAT MESSAGES
-  static getChatMessages(userId1: string, userId2: string): ChatMessage[] {
+  static getChatMessages(
+    userId1: string,
+    userId2: string,
+    user1Username?: string,
+    user2Username?: string
+  ): ChatMessage[] {
     try {
       const raw = localStorage.getItem(CHATS_STORAGE_KEY);
       const allChats: ChatMessage[] = raw ? JSON.parse(raw) : [];
-      return allChats.filter(
-        (m) =>
-          (m.senderId === userId1 && m.recipientId === userId2) ||
-          (m.senderId === userId2 && m.recipientId === userId1)
-      ).sort((a, b) => a.createdAt - b.createdAt);
+      const u1U = (user1Username || '').toLowerCase();
+      const u2U = (user2Username || '').toLowerCase();
+
+      return allChats
+        .filter((m) => {
+          const sU = (m.senderUsername || '').toLowerCase();
+          const rU = (m.recipientUsername || '').toLowerCase();
+
+          const match1to2 =
+            (m.senderId === userId1 || (u1U && sU === u1U)) &&
+            (m.recipientId === userId2 || (u2U && rU === u2U));
+          const match2to1 =
+            (m.senderId === userId2 || (u2U && sU === u2U)) &&
+            (m.recipientId === userId1 || (u1U && rU === u1U));
+
+          return match1to2 || match2to1;
+        })
+        .sort((a, b) => a.createdAt - b.createdAt);
     } catch {
       return [];
     }
@@ -438,5 +481,145 @@ export class StorageService {
     allChats.push(newMsg);
     localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(allChats));
     return newMsg;
+  }
+
+  static mergeChatMessages(newMsgs: ChatMessage[]): void {
+    if (!newMsgs || newMsgs.length === 0) return;
+    try {
+      const raw = localStorage.getItem(CHATS_STORAGE_KEY);
+      const allChats: ChatMessage[] = raw ? JSON.parse(raw) : [];
+      const map = new Map<string, ChatMessage>();
+      allChats.forEach((m) => map.set(m.id, m));
+      newMsgs.forEach((m) => map.set(m.id, m));
+      localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(Array.from(map.values())));
+    } catch {
+      // ignore
+    }
+  }
+
+  static markChatMessagesAsRead(myId: string, myUsername?: string, peerId?: string, peerUsername?: string): void {
+    try {
+      const raw = localStorage.getItem(CHATS_STORAGE_KEY);
+      if (!raw) return;
+      const allChats: ChatMessage[] = JSON.parse(raw);
+      const myU = (myUsername || '').toLowerCase();
+      const pU = (peerUsername || '').toLowerCase();
+
+      let changed = false;
+      const updated = allChats.map((m) => {
+        const isRecipient = m.recipientId === myId || (myU && (m.recipientUsername || '').toLowerCase() === myU);
+        const isFromPeer = !peerId || m.senderId === peerId || (pU && (m.senderUsername || '').toLowerCase() === pU);
+        if (isRecipient && isFromPeer && !m.read) {
+          changed = true;
+          return { ...m, read: true };
+        }
+        return m;
+      });
+
+      if (changed) {
+        localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(updated));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  static getUnreadChatCount(myId: string, myUsername?: string): number {
+    try {
+      const raw = localStorage.getItem(CHATS_STORAGE_KEY);
+      if (!raw) return 0;
+      const allChats: ChatMessage[] = JSON.parse(raw);
+      const myU = (myUsername || '').toLowerCase();
+      return allChats.filter((m) => {
+        const isForMe = m.recipientId === myId || (myU && (m.recipientUsername || '').toLowerCase() === myU);
+        return isForMe && !m.read;
+      }).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  // NOTIFICATIONS
+  static getNotifications(username: string): AppNotification[] {
+    try {
+      const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      const allNotifs: AppNotification[] = raw ? JSON.parse(raw) : [];
+      const cleanU = username.trim().toLowerCase().replace(/^@/, '');
+      return allNotifs
+        .filter((n) => n.recipientUsername.toLowerCase() === cleanU)
+        .sort((a, b) => b.createdAt - a.createdAt);
+    } catch {
+      return [];
+    }
+  }
+
+  static saveNotification(notification: AppNotification): void {
+    try {
+      const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      const allNotifs: AppNotification[] = raw ? JSON.parse(raw) : [];
+      // avoid duplicates by ID
+      const existsIndex = allNotifs.findIndex((n) => n.id === notification.id);
+      if (existsIndex >= 0) {
+        allNotifs[existsIndex] = notification;
+      } else {
+        allNotifs.unshift(notification);
+      }
+      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(allNotifs));
+    } catch {
+      // ignore
+    }
+  }
+
+  static mergeNotifications(notifications: AppNotification[]): void {
+    if (!notifications || notifications.length === 0) return;
+    try {
+      const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      const allNotifs: AppNotification[] = raw ? JSON.parse(raw) : [];
+      const map = new Map<string, AppNotification>();
+      allNotifs.forEach((n) => map.set(n.id, n));
+      notifications.forEach((n) => map.set(n.id, n));
+      localStorage.setItem(
+        NOTIFICATIONS_STORAGE_KEY,
+        JSON.stringify(Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt))
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  static markNotificationAsRead(notifId: string): void {
+    try {
+      const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      if (!raw) return;
+      const allNotifs: AppNotification[] = JSON.parse(raw);
+      const updated = allNotifs.map((n) => (n.id === notifId ? { ...n, read: true } : n));
+      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  }
+
+  static markAllNotificationsAsRead(username: string): void {
+    try {
+      const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      if (!raw) return;
+      const allNotifs: AppNotification[] = JSON.parse(raw);
+      const cleanU = username.trim().toLowerCase().replace(/^@/, '');
+      const updated = allNotifs.map((n) =>
+        n.recipientUsername.toLowerCase() === cleanU ? { ...n, read: true } : n
+      );
+      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  }
+
+  static getUnreadNotificationsCount(username: string): number {
+    try {
+      const notifs = this.getNotifications(username);
+      return notifs.filter((n) => !n.read).length;
+    } catch {
+      return 0;
+    }
   }
 }

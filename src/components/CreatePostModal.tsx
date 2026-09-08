@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Department, PostCategory, Post } from '../types';
+import { Department, PostCategory, Post, AppNotification } from '../types';
 import { StorageService } from '../services/storageService';
 import { FirestoreService } from '../services/firestoreService';
 import { compressPostImage } from '../utils/avatarUtils';
@@ -279,6 +279,28 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       await FirestoreService.createPost(newPost);
       // 2. Also keep in StorageService as fallback
       StorageService.savePost(newPost);
+
+      // 3. Dispatch notifications for any users tagged in this post
+      const uniqueMentions = Array.from(new Set(foundMentions)).filter(
+        (u) => u.toLowerCase() !== currentUser.username.toLowerCase()
+      );
+      for (const taggedUsername of uniqueMentions) {
+        const notif: AppNotification = {
+          id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          recipientUsername: taggedUsername,
+          type: 'mention_post',
+          senderUsername: currentUser.username,
+          senderName: currentUser.fullName,
+          senderAvatar: currentUser.avatar,
+          postId: newPost.id,
+          postTitle: newPost.title || newPost.content.substring(0, 40) + '...',
+          snippet: newPost.content.substring(0, 90),
+          createdAt: Date.now(),
+          read: false,
+        };
+        FirestoreService.saveNotification(notif).catch(() => {});
+      }
+
       onPostCreated(newPost);
       onClose();
       // Reset form

@@ -22,7 +22,8 @@ import {
   ExternalLink,
   Image as ImageIcon,
   Copy,
-  Check
+  Check,
+  Trash2,
 } from 'lucide-react';
 
 const MainWorkplaceFeed: React.FC = () => {
@@ -41,6 +42,7 @@ const MainWorkplaceFeed: React.FC = () => {
   const [firestoreNotice, setFirestoreNotice] = useState<string | null>(null);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [rulesCopied, setRulesCopied] = useState(false);
+  const [deleteToast, setDeleteToast] = useState<string | null>(null);
 
   // Initialize storage & subscribe to Firestore live feed
   useEffect(() => {
@@ -103,11 +105,13 @@ const MainWorkplaceFeed: React.FC = () => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((p) => {
-        const titleMatch = p.title?.toLowerCase().includes(q);
-        const contentMatch = p.content.toLowerCase().includes(q);
-        const authorMatch = p.authorName.toLowerCase().includes(q) || p.authorUsername.toLowerCase().includes(q.replace(/^@/, ''));
-        const tagMatch = p.tags?.some((t) => t.toLowerCase().includes(q.replace(/^#/, '')));
-        const mentionMatch = p.mentions?.some((m) => m.toLowerCase().includes(q.replace(/^@/, '')));
+        const titleMatch = p.title ? p.title.toLowerCase().includes(q) : false;
+        const contentMatch = (p.content || '').toLowerCase().includes(q);
+        const authorMatch =
+          (p.authorName || '').toLowerCase().includes(q) ||
+          (p.authorUsername || '').toLowerCase().includes(q.replace(/^@/, ''));
+        const tagMatch = p.tags?.some((t) => (t || '').toLowerCase().includes(q.replace(/^#/, '')));
+        const mentionMatch = p.mentions?.some((m) => (m || '').toLowerCase().includes(q.replace(/^@/, '')));
         return titleMatch || contentMatch || authorMatch || tagMatch || mentionMatch;
       });
     }
@@ -134,7 +138,8 @@ const MainWorkplaceFeed: React.FC = () => {
     return posts.filter(
       (p) =>
         p.authorId === currentUser.id ||
-        p.authorUsername.toLowerCase() === currentUser.username.toLowerCase()
+        (Boolean(p.authorUsername && currentUser.username) &&
+          p.authorUsername.toLowerCase() === currentUser.username.toLowerCase())
     ).length;
   }, [posts, currentUser]);
 
@@ -199,6 +204,10 @@ const MainWorkplaceFeed: React.FC = () => {
   const handleDeletePost = async (postId: string) => {
     // Optimistic UI update
     setPosts((prev) => prev.filter((p) => p.id !== postId));
+    setDeleteToast('Postingan berhasil dihapus.');
+    setTimeout(() => {
+      setDeleteToast(null);
+    }, 3500);
 
     try {
       await FirestoreService.deletePost(postId);
@@ -217,6 +226,21 @@ const MainWorkplaceFeed: React.FC = () => {
     setSearchQuery(`@${username}`);
   };
 
+  const handleSelectPost = (postId: string) => {
+    setSelectedDepartment('Semua Departemen');
+    setSearchQuery('');
+    setTimeout(() => {
+      const el = document.getElementById(postId) || document.querySelector(`[data-post-id="${postId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-[#1877F2]', 'shadow-lg');
+        setTimeout(() => {
+          el.classList.remove('ring-2', 'ring-[#1877F2]', 'shadow-lg');
+        }, 3000);
+      }
+    }, 120);
+  };
+
   return (
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col font-sans text-[#050505]">
       {/* Facebook-Style Top Navigation */}
@@ -228,6 +252,7 @@ const MainWorkplaceFeed: React.FC = () => {
           setIsChatOpen(true);
         })}
         onOpenProfile={() => requireAuth('melihat profil dan postingan Anda', () => setIsProfileOpen(true))}
+        onSelectPost={handleSelectPost}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         isAtHome={selectedDepartment === 'Semua Departemen' && !searchQuery}
@@ -459,7 +484,8 @@ const MainWorkplaceFeed: React.FC = () => {
                     isMyPost={
                       currentUser
                         ? currentUser.id === post.authorId ||
-                          currentUser.username.toLowerCase() === post.authorUsername.toLowerCase()
+                          (Boolean(currentUser.username && post.authorUsername) &&
+                            currentUser.username.toLowerCase() === post.authorUsername.toLowerCase())
                         : false
                     }
                   />
@@ -621,6 +647,16 @@ service cloud.firestore {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Delete Feedback Toast Notification */}
+      {deleteToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 bg-zinc-900 text-white text-xs font-semibold rounded-xl shadow-2xl border border-zinc-800 animate-in slide-in-from-bottom-3 duration-200">
+          <div className="w-5 h-5 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
+            <Trash2 className="w-3.5 h-3.5" />
+          </div>
+          <span>{deleteToast}</span>
         </div>
       )}
     </div>

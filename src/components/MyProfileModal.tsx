@@ -114,7 +114,8 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
     return posts.filter(
       (p) =>
         p.authorId === currentUser.id ||
-        p.authorUsername.toLowerCase() === currentUser.username.toLowerCase()
+        (Boolean(p.authorUsername && currentUser.username) &&
+          p.authorUsername.toLowerCase() === currentUser.username.toLowerCase())
     );
   }, [posts, currentUser]);
 
@@ -138,9 +139,9 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((p) => {
-        const titleMatch = p.title?.toLowerCase().includes(q);
-        const contentMatch = p.content.toLowerCase().includes(q);
-        const tagMatch = p.tags?.some((t) => t.toLowerCase().includes(q.replace(/^#/, '')));
+        const titleMatch = p.title ? p.title.toLowerCase().includes(q) : false;
+        const contentMatch = (p.content || '').toLowerCase().includes(q);
+        const tagMatch = p.tags?.some((t) => (t || '').toLowerCase().includes(q.replace(/^#/, '')));
         return titleMatch || contentMatch || tagMatch;
       });
     }

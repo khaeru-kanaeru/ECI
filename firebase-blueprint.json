@@ -75,10 +75,31 @@
         "recipientId": { "type": "string", "description": "Recipient user ID" },
         "recipientUsername": { "type": "string", "description": "Recipient username" },
         "content": { "type": "string", "description": "Message body" },
-        "timestamp": { "type": "number", "description": "Timestamp in ms" },
-        "isRead": { "type": "boolean", "description": "Read receipt status" }
+        "createdAt": { "type": "number", "description": "Timestamp in ms" },
+        "read": { "type": "boolean", "description": "Read receipt status" }
       },
-      "required": ["id", "senderId", "senderUsername", "senderName", "recipientId", "recipientUsername", "content", "timestamp"]
+      "required": ["id", "senderId", "senderUsername", "senderName", "recipientId", "recipientUsername", "content"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Notification for employee tag/mentions and messages",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Notification ID" },
+        "recipientUsername": { "type": "string", "description": "Target username" },
+        "recipientId": { "type": "string", "description": "Target user ID" },
+        "type": { "type": "string", "enum": ["mention_post", "mention_comment", "chat_message"] },
+        "senderUsername": { "type": "string", "description": "Sender username" },
+        "senderName": { "type": "string", "description": "Sender display name" },
+        "senderAvatar": { "type": "string", "description": "Sender avatar URL" },
+        "postId": { "type": "string", "description": "Associated post ID" },
+        "postTitle": { "type": "string", "description": "Associated post title" },
+        "commentId": { "type": "string", "description": "Associated comment ID" },
+        "snippet": { "type": "string", "description": "Text excerpt containing the mention" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in ms" },
+        "read": { "type": "boolean", "description": "Read status" }
+      },
+      "required": ["id", "recipientUsername", "type", "senderUsername", "senderName", "createdAt", "read"]
     }
   },
   "firestore": {
@@ -97,6 +118,10 @@
     "/messages/{messageId}": {
       "schema": "ChatMessage",
       "description": "Direct workplace chat messages"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications for mentions and alerts"
     }
   }
 }

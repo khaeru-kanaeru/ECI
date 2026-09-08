@@ -29,6 +29,12 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    // Workplace mention & activity notifications
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // Default rule for other collections
     match /{document=**} {
       allow read, write: if false;
