@@ -1,4 +1,4 @@
-name: Deploy Next.js site to Pages
+name: Deploy Vite React site to Pages
 
 on:
   push:
@@ -29,19 +29,16 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
 
-      - name: Build with Next.js
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NEXT_PUBLIC_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - name: Build with Vite
         run: npm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./out
+          path: ./dist # Vite menyimpan hasil compile di folder dist
 
   deploy:
     environment:
