@@ -1,0 +1,6 @@
+{
+  "name": "ECI - Electronic Central Information",
+  "description": "ECI (Electronic Central Information) - Platform pusat informasi elektronik internal perusahaan untuk koordinasi departemen ekspor dan operasional.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

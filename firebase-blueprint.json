@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Workplace employee profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user identifier" },
+        "username": { "type": "string", "description": "Unique username handle" },
+        "fullName": { "type": "string", "description": "Full name of employee" },
+        "department": { "type": "string", "description": "Employee department" },
+        "role": { "type": "string", "description": "Job title or role" },
+        "avatar": { "type": "string", "description": "Avatar photo URL" },
+        "bio": { "type": "string", "description": "Brief biography" },
+        "joinedAt": { "type": "number", "description": "Timestamp when joined" },
+        "isOnline": { "type": "boolean", "description": "Active status" }
+      },
+      "required": ["id", "username", "fullName", "department", "role"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "Workplace social network post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Post ID" },
+        "authorId": { "type": "string", "description": "Author user ID" },
+        "authorUsername": { "type": "string", "description": "Author username" },
+        "authorName": { "type": "string", "description": "Author display name" },
+        "authorAvatar": { "type": "string", "description": "Author avatar URL" },
+        "authorDepartment": { "type": "string", "description": "Author department" },
+        "authorRole": { "type": "string", "description": "Author role" },
+        "targetDepartment": { "type": "string", "description": "Target department" },
+        "category": { "type": "string", "enum": ["Regular/Information Only", "Urgent", "Top Urgent"] },
+        "title": { "type": "string", "description": "Post title" },
+        "content": { "type": "string", "description": "Post body content" },
+        "imageUrls": { "type": "array", "description": "List of photo URLs" },
+        "tags": { "type": "array", "description": "Hashtags" },
+        "mentions": { "type": "array", "description": "Mentioned usernames" },
+        "upvotesCount": { "type": "number", "description": "Number of upvotes" },
+        "upvotedBy": { "type": "array", "description": "User IDs who upvoted" },
+        "commentsCount": { "type": "number", "description": "Number of comments" },
+        "createdAt": { "type": "number", "description": "Creation timestamp" },
+        "updatedAt": { "type": "number", "description": "Update timestamp" },
+        "recommendationScore": { "type": "number", "description": "Score for recommendation algorithm" }
+      },
+      "required": ["id", "authorId", "authorUsername", "authorName", "authorDepartment", "category", "content", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Comment on a workplace post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Comment ID" },
+        "postId": { "type": "string", "description": "Associated post ID" },
+        "authorId": { "type": "string", "description": "Author user ID" },
+        "authorUsername": { "type": "string", "description": "Author username" },
+        "authorName": { "type": "string", "description": "Author display name" },
+        "authorAvatar": { "type": "string", "description": "Author avatar URL" },
+        "authorDepartment": { "type": "string", "description": "Author department" },
+        "content": { "type": "string", "description": "Comment text" },
+        "createdAt": { "type": "number", "description": "Timestamp" },
+        "mentions": { "type": "array", "description": "Mentioned usernames" }
+      },
+      "required": ["id", "postId", "authorId", "authorName", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Employee user profiles"
+    },
+    "/posts/{postId}": {
+      "schema": "Post",
+      "description": "Workplace feed posts"
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on posts"
+    }
+  }
+}

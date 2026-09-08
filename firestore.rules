@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Workplace employee profiles
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Workplace feed posts
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if true;
+
+      // Subcollection comments
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if true;
+        allow delete: if true;
+      }
+    }
+
+    // Default rule for other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

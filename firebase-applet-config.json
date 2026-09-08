@@ -1,0 +1,12 @@
+{
+  "projectId": "eci-sys",
+  "appId": "1:283153233622:web:0bcf952ca27b16b7c27b77",
+  "apiKey": "AIzaSyBLvPE7qMdcg3IKxoZ40MoF9P8fuqntbuY",
+  "authDomain": "eci-sys.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "eci-sys.firebasestorage.app",
+  "messagingSenderId": "283153233622",
+  "measurementId": "",
+  "oAuthClientId": "",
+  "recaptchaSiteKey": ""
+}
