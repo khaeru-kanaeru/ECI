@@ -1,22 +1,24 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+// Inisialisasi Firebase App secara aman
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Support standard (default) or custom firestore database ID
+// Inisialisasi Firestore & Auth
 const dbId = (firebaseConfig as any).firestoreDatabaseId;
 export const db = dbId && dbId !== '(default)' && dbId !== ''
   ? getFirestore(app, dbId)
   : getFirestore(app);
+
 export const auth = getAuth(app);
 
 let authInitPromise: Promise<FirebaseUser | null> | null = null;
 
 /**
- * Ensure Firebase client has an active authenticated session
- * to satisfy Firestore security rules.
+ * Memastikan koneksi autentikasi Firebase aktif.
+ * Tidak akan memblokir eksekusi walau login anonim dinonaktifkan di console.
  */
 export function ensureFirebaseAuth(): Promise<FirebaseUser | null> {
   if (auth.currentUser) {
@@ -24,24 +26,46 @@ export function ensureFirebaseAuth(): Promise<FirebaseUser | null> {
   }
   if (!authInitPromise) {
     authInitPromise = new Promise((resolve) => {
+      let resolved = false;
+
+      // Pantau state auth (Google Sign-In atau sesi aktif sebelumnya)
       const unsubscribe = onAuthStateChanged(auth, (user) => {
-        if (user) {
+        if (user && !resolved) {
+          resolved = true;
           unsubscribe();
           resolve(user);
         }
       });
+
+      // Coba Anonymous Auth sebagai fallback jika belum ada user login
       signInAnonymously(auth)
-        .then((cred) => resolve(cred.user))
+        .then((cred) => {
+          if (!resolved) {
+            resolved = true;
+            resolve(cred.user);
+          }
+        })
         .catch((err) => {
-          console.warn('Firebase anonymous auth warning:', err);
-          resolve(null);
+          console.warn('Anonymous auth fallback bypassed:', err?.message || err);
+          if (!resolved) {
+            resolved = true;
+            resolve(null);
+          }
         });
+
+      // Timeout batas aman agar alur simpan data tidak gantung
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve(auth.currentUser);
+        }
+      }, 3000);
     });
   }
   return authInitPromise;
 }
 
-// Automatically ensure auth session on application boot
+// Jalankan pengecekan auth awal saat aplikasi dibuka
 ensureFirebaseAuth().catch(() => {});
 
 export enum OperationType {
@@ -66,31 +90,34 @@ export interface FirestoreErrorInfo {
   };
 }
 
+/**
+ * Log error Firestore tanpa melempar crash total pada UI,
+ * sehingga fallback offline/lokal tetap berjalan normal.
+ */
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
+      userId: auth.currentUser?.uid || null,
+      email: auth.currentUser?.email || null,
+      emailVerified: auth.currentUser?.emailVerified || null,
+      isAnonymous: auth.currentUser?.isAnonymous || null,
+      tenantId: auth.currentUser?.tenantId || null,
     },
     operationType,
     path,
   };
-  console.warn('Firestore Notice: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.warn('Firestore Operation Notice:', JSON.stringify(errInfo));
 }
 
-// Connection check
+/**
+ * Tes koneksi server Firestore di latar belakang
+ */
 export async function testFirestoreConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firebase client offline check:', error.message);
-    }
+    // Abaikan jika dokumen pengetesan awal tidak ada
   }
 }
 
