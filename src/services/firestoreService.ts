@@ -213,7 +213,6 @@ export class FirestoreService {
       await ensureFirebaseAuth();
       const cleanComment = sanitizeForFirestore(comment);
       const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
-      const cleanComment = sanitizeForFirestore(comment);
       await setDoc(commentRef, cleanComment);
 
       const postRef = doc(db, POSTS_COLLECTION, postId);
