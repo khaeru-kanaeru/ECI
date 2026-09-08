@@ -121,7 +121,6 @@ export class FirestoreService {
    * Create a new post in Firestore and LocalStorage
    */
   static async createPost(post: Post): Promise<void> {
-    // 1. Immediately persist locally
     try {
       StorageService.savePost(post);
       const current = this.getCachedPosts();
@@ -131,11 +130,8 @@ export class FirestoreService {
       console.warn('Local save warning:', e);
     }
 
-    // 2. Sync to cloud Firestore with sanitized fields
-    // 2. Ensure Firebase authentication is established
     await ensureFirebaseAuth();
 
-    // 3. Sync to cloud Firestore with sanitized fields
     try {
       const postRef = doc(db, POSTS_COLLECTION, post.id);
       const cleanData = sanitizeForFirestore({
@@ -150,7 +146,6 @@ export class FirestoreService {
       try {
         handleFirestoreError(error, OperationType.CREATE, `${POSTS_COLLECTION}/${post.id}`);
       } catch {
-        // Re-throw so caller can know if cloud failed
         throw error;
       }
     }
@@ -160,14 +155,12 @@ export class FirestoreService {
    * Toggle Upvote (Follow Up) on a post
    */
   static async toggleUpvote(postId: string, userId: string): Promise<void> {
-    // 1. Local update
     try {
       StorageService.toggleUpvote(postId, userId);
     } catch (e) {
       console.warn('Local toggleUpvote warning:', e);
     }
 
-    // 2. Cloud update
     try {
       await ensureFirebaseAuth();
       const postRef = doc(db, POSTS_COLLECTION, postId);
@@ -201,24 +194,26 @@ export class FirestoreService {
    * Add a comment to a post in Firestore
    */
   static async addComment(postId: string, comment: Comment): Promise<void> {
-    // 1. Local update
     try {
       StorageService.addComment(postId, comment);
     } catch (e) {
       console.warn('Local addComment warning:', e);
     }
-export const addComment = async (postId: string, comment: any) => {
-  try {
-    const cleanComment = sanitizeForFirestore(comment);
-    const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
-    await setDoc(commentRef, cleanComment);
-  } catch (error) {
-    console.warn('Firestore addComment cloud sync error:', (error as any)?.message);
+
+    try {
+      await ensureFirebaseAuth();
+      const cleanComment = sanitizeForFirestore(comment);
+      const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
+      await setDoc(commentRef, cleanComment);
+    } catch (error) {
+      console.warn('Firestore addComment cloud sync error:', (error as any)?.message);
+    }
   }
-};
-    
+
+  /**
+   * Delete post from Firestore and LocalStorage
+   */
   static async deletePost(postId: string): Promise<void> {
-    // 1. Local update
     try {
       StorageService.deletePost(postId);
       const current = this.getCachedPosts();
@@ -228,7 +223,6 @@ export const addComment = async (postId: string, comment: any) => {
       console.warn('Local deletePost warning:', e);
     }
 
-    // 2. Cloud update
     try {
       await ensureFirebaseAuth();
       await deleteDoc(doc(db, POSTS_COLLECTION, postId));
@@ -339,7 +333,7 @@ export const addComment = async (postId: string, comment: any) => {
   static async syncLocalDataToFirestore(): Promise<void> {
     try {
       await ensureFirebaseAuth();
-      
+
       // 1. Sync local posts
       const localPosts = StorageService.getPosts();
       for (const p of localPosts) {
@@ -371,7 +365,6 @@ export const addComment = async (postId: string, comment: any) => {
    * NEVER deletes real user posts!
    */
   static async cleanLegacyPlaceholders(): Promise<void> {
-    // 1. Clear obsolete legacy keys (NEVER clear LOCAL_POSTS_CACHE_KEY!)
     const keysToRemove = [
       'enterprise_network_posts_v2',
       'enterprise_network_posts_v1',
@@ -380,7 +373,6 @@ export const addComment = async (postId: string, comment: any) => {
     ];
     keysToRemove.forEach((k) => localStorage.removeItem(k));
 
-    // 2. Query Firestore and remove ONLY specific dummy IDs
     try {
       await ensureFirebaseAuth();
       const snap = await getDocs(collection(db, POSTS_COLLECTION));
