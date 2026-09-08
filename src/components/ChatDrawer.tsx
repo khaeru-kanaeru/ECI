@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { StorageService } from '../services/storageService';
+import { FirestoreService } from '../services/firestoreService';
 import { User, ChatMessage } from '../types';
 import {
   X,
@@ -55,6 +56,19 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
     if (currentUser && selectedUser) {
       const msgs = StorageService.getChatMessages(currentUser.id, selectedUser.id);
       setMessages(msgs);
+
+      // Subscribe to real-time chat messages in Firestore
+      const unsubscribe = FirestoreService.subscribeToChatMessages(
+        currentUser.id,
+        selectedUser.id,
+        (liveMsgs) => {
+          setMessages(liveMsgs);
+        }
+      );
+
+      return () => {
+        unsubscribe();
+      };
     }
   }, [currentUser, selectedUser]);
 
@@ -77,6 +91,9 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
       content: inputText.trim(),
     });
 
+    // Sync message to Firestore
+    FirestoreService.saveChatMessage(newMsg).catch(() => {});
+
     setMessages((prev) => [...prev, newMsg]);
     setInputText('');
 
@@ -90,6 +107,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
         recipientUsername: currentUser.username,
         content: `Halo ${currentUser.fullName}! Terima kasih sudah menghubungi divisi ${selectedUser.department}. Pesan Anda telah kami terima dan akan segera kami follow up.`,
       });
+      FirestoreService.saveChatMessage(reply).catch(() => {});
       setMessages((prev) => [...prev, reply]);
     }, 1500);
   };

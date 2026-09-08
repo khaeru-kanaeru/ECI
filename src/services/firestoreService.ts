@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
@@ -9,12 +10,31 @@ import {
   orderBy,
   getDocs,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { db, handleFirestoreError, OperationType, ensureFirebaseAuth } from './firebase';
 import { StorageService } from './storageService';
-import { Post, Comment } from '../types';
+import { Post, Comment, User, ChatMessage } from '../types';
 
 const POSTS_COLLECTION = 'posts';
+const USERS_COLLECTION = 'users';
+const MESSAGES_COLLECTION = 'messages';
 const LOCAL_POSTS_CACHE_KEY = 'workplace_firebase_posts_cache_v3';
+
+/**
+ * Strips all undefined fields recursively so Firestore setDoc / updateDoc
+ * will never fail with "Unsupported field value: undefined".
+ */
+export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) continue;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = sanitizeForFirestore(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
 
 export class FirestoreService {
   /**
@@ -24,6 +44,8 @@ export class FirestoreService {
     onPostsUpdate: (posts: Post[]) => void,
     onError?: (error: any) => void
   ): () => void {
+    ensureFirebaseAuth().catch(() => {});
+
     const postsQuery = query(collection(db, POSTS_COLLECTION), orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(
@@ -32,12 +54,11 @@ export class FirestoreService {
         const posts: Post[] = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as Post;
-          // Filter out legacy placeholder IDs
+          // Filter out ONLY exact legacy dummy IDs
           if (
             ['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(docSnap.id) ||
             docSnap.id.startsWith('archive-post-')
           ) {
-            // Delete legacy placeholder document in the background
             deleteDoc(docSnap.ref).catch(() => {});
             return;
           }
@@ -56,7 +77,7 @@ export class FirestoreService {
           });
         });
 
-        // Cache locally for instant loading
+        // Cache locally for instant loading on page refresh
         try {
           localStorage.setItem(LOCAL_POSTS_CACHE_KEY, JSON.stringify(posts));
         } catch {
@@ -88,7 +109,6 @@ export class FirestoreService {
       const cached = localStorage.getItem(LOCAL_POSTS_CACHE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        // Filter out any legacy placeholder posts if they linger in local storage
         return parsed.filter((p: Post) => !['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id));
       }
     } catch {
@@ -104,25 +124,32 @@ export class FirestoreService {
     // 1. Immediately persist locally
     try {
       StorageService.savePost(post);
+      const current = this.getCachedPosts();
+      const updated = [post, ...current.filter((p) => p.id !== post.id)];
+      localStorage.setItem(LOCAL_POSTS_CACHE_KEY, JSON.stringify(updated));
     } catch (e) {
       console.warn('Local save warning:', e);
     }
 
-    // 2. Sync to cloud Firestore
+    // 2. Ensure Firebase authentication is established
+    await ensureFirebaseAuth();
+
+    // 3. Sync to cloud Firestore with sanitized fields
     try {
       const postRef = doc(db, POSTS_COLLECTION, post.id);
-      await setDoc(postRef, {
+      const cleanData = sanitizeForFirestore({
         ...post,
         imageUrls: post.imageUrls || (post.imageUrl ? [post.imageUrl] : []),
         createdAt: post.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
+      await setDoc(postRef, cleanData);
     } catch (error) {
-      console.warn('Firestore createPost cloud sync error:', (error as any)?.message);
+      console.error('Firestore createPost cloud sync error:', error);
       try {
         handleFirestoreError(error, OperationType.CREATE, `${POSTS_COLLECTION}/${post.id}`);
       } catch {
-        // Handled: local store already updated
+        throw error;
       }
     }
   }
@@ -140,12 +167,12 @@ export class FirestoreService {
 
     // 2. Cloud update
     try {
+      await ensureFirebaseAuth();
       const postRef = doc(db, POSTS_COLLECTION, postId);
-      const snapshot = await getDocs(query(collection(db, POSTS_COLLECTION)));
-      const postDoc = snapshot.docs.find((d) => d.id === postId);
-      if (!postDoc) return;
+      const postSnap = await getDoc(postRef);
+      if (!postSnap.exists()) return;
 
-      const data = postDoc.data() as Post;
+      const data = postSnap.data() as Post;
       const upvotedBy: string[] = data.upvotedBy || [];
       const hasUpvoted = upvotedBy.includes(userId);
 
@@ -181,17 +208,19 @@ export class FirestoreService {
 
     // 2. Cloud update
     try {
+      await ensureFirebaseAuth();
+      const cleanComment = sanitizeForFirestore(comment);
       const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
-      await setDoc(commentRef, comment);
+      await setDoc(commentRef, cleanComment);
 
-      const snapshot = await getDocs(query(collection(db, POSTS_COLLECTION)));
-      const postDoc = snapshot.docs.find((d) => d.id === postId);
-      if (postDoc) {
-        const data = postDoc.data() as Post;
+      const postRef = doc(db, POSTS_COLLECTION, postId);
+      const postSnap = await getDoc(postRef);
+      if (postSnap.exists()) {
+        const data = postSnap.data() as Post;
         const currentComments = data.comments || [];
-        const updatedComments = [...currentComments, comment];
+        const updatedComments = [...currentComments, cleanComment as Comment];
 
-        await updateDoc(doc(db, POSTS_COLLECTION, postId), {
+        await updateDoc(postRef, {
           comments: updatedComments,
           commentsCount: updatedComments.length,
           updatedAt: Date.now(),
@@ -214,12 +243,16 @@ export class FirestoreService {
     // 1. Local update
     try {
       StorageService.deletePost(postId);
+      const current = this.getCachedPosts();
+      const updated = current.filter((p) => p.id !== postId);
+      localStorage.setItem(LOCAL_POSTS_CACHE_KEY, JSON.stringify(updated));
     } catch (e) {
       console.warn('Local deletePost warning:', e);
     }
 
     // 2. Cloud update
     try {
+      await ensureFirebaseAuth();
       await deleteDoc(doc(db, POSTS_COLLECTION, postId));
     } catch (error) {
       console.warn('Firestore deletePost cloud sync error:', (error as any)?.message);
@@ -232,30 +265,159 @@ export class FirestoreService {
   }
 
   /**
+   * Save or update employee user in Firestore
+   */
+  static async saveUser(user: User): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      const userRef = doc(db, USERS_COLLECTION, user.id);
+      const clean = sanitizeForFirestore(user);
+      await setDoc(userRef, clean, { merge: true });
+    } catch (error) {
+      console.warn('Firestore saveUser error:', error);
+    }
+  }
+
+  /**
+   * Real-time subscription to employee users collection
+   */
+  static subscribeToUsers(onUsersUpdate: (users: User[]) => void): () => void {
+    ensureFirebaseAuth().catch(() => {});
+
+    const usersQuery = query(collection(db, USERS_COLLECTION));
+    const unsubscribe = onSnapshot(
+      usersQuery,
+      (snapshot) => {
+        const cloudUsers: User[] = [];
+        snapshot.forEach((docSnap) => {
+          const u = docSnap.data() as User;
+          cloudUsers.push({ ...u, id: docSnap.id });
+        });
+        if (cloudUsers.length > 0) {
+          onUsersUpdate(cloudUsers);
+        }
+      },
+      (err) => {
+        console.warn('Firestore users subscription status:', err);
+      }
+    );
+
+    return unsubscribe;
+  }
+
+  /**
+   * Save a chat message in Firestore
+   */
+  static async saveChatMessage(msg: ChatMessage): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      const msgRef = doc(db, MESSAGES_COLLECTION, msg.id);
+      const clean = sanitizeForFirestore(msg);
+      await setDoc(msgRef, clean);
+    } catch (error) {
+      console.warn('Firestore saveChatMessage error:', error);
+    }
+  }
+
+  /**
+   * Subscribe to chat messages in Firestore between two users
+   */
+  static subscribeToChatMessages(
+    userId1: string,
+    userId2: string,
+    onMessagesUpdate: (msgs: ChatMessage[]) => void
+  ): () => void {
+    ensureFirebaseAuth().catch(() => {});
+
+    const msgsQuery = query(collection(db, MESSAGES_COLLECTION), orderBy('timestamp', 'asc'));
+    const unsubscribe = onSnapshot(
+      msgsQuery,
+      (snapshot) => {
+        const relevant: ChatMessage[] = [];
+        snapshot.forEach((docSnap) => {
+          const m = docSnap.data() as ChatMessage;
+          const isMatch =
+            (m.senderId === userId1 && m.recipientId === userId2) ||
+            (m.senderId === userId2 && m.recipientId === userId1);
+          if (isMatch) {
+            relevant.push({ ...m, id: docSnap.id });
+          }
+        });
+        if (relevant.length > 0) {
+          onMessagesUpdate(relevant);
+        }
+      },
+      (err) => {
+        console.warn('Firestore messages subscription status:', err);
+      }
+    );
+
+    return unsubscribe;
+  }
+
+  /**
+   * Sync existing local posts and users into Firestore so nothing is lost
+   */
+  static async syncLocalDataToFirestore(): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      
+      // 1. Sync local posts
+      const localPosts = StorageService.getPosts();
+      for (const p of localPosts) {
+        if (!['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id) && !p.id.startsWith('archive-post-')) {
+          const ref = doc(db, POSTS_COLLECTION, p.id);
+          const snap = await getDoc(ref);
+          if (!snap.exists()) {
+            await setDoc(ref, sanitizeForFirestore(p));
+          }
+        }
+      }
+
+      // 2. Sync local users
+      const localUsers = StorageService.getUsers();
+      for (const u of localUsers) {
+        const uRef = doc(db, USERS_COLLECTION, u.id);
+        const uSnap = await getDoc(uRef);
+        if (!uSnap.exists()) {
+          await setDoc(uRef, sanitizeForFirestore(u));
+        }
+      }
+    } catch (e) {
+      console.warn('syncLocalDataToFirestore warning:', e);
+    }
+  }
+
+  /**
    * Clean up any legacy placeholder posts from Firestore and LocalStorage
+   * NEVER deletes real user posts!
    */
   static async cleanLegacyPlaceholders(): Promise<void> {
-    // 1. Clear legacy localStorage keys
+    // 1. Clear obsolete legacy keys (NEVER clear LOCAL_POSTS_CACHE_KEY!)
     const keysToRemove = [
       'enterprise_network_posts_v2',
       'enterprise_network_posts_v1',
       'enterprise_network_posts_clean_v1',
       'workplace_posts_v1',
-      'workplace_firebase_posts_cache_v3',
-      'workplace_firebase_posts_cache_v2',
     ];
     keysToRemove.forEach((k) => localStorage.removeItem(k));
 
-    // 2. Query Firestore and remove any leftover placeholder posts
+    // 2. Query Firestore and remove ONLY specific dummy IDs
     try {
+      await ensureFirebaseAuth();
       const snap = await getDocs(collection(db, POSTS_COLLECTION));
-      const placeholderIds = ['post-1', 'post-2', 'post-3', 'post-4', 'post-5'];
+      const placeholderIds = new Set([
+        'post-1',
+        'post-2',
+        'post-3',
+        'post-4',
+        'post-5',
+        'archive-post-1',
+        'archive-post-2',
+        'archive-post-3',
+      ]);
       for (const docSnap of snap.docs) {
-        if (
-          placeholderIds.includes(docSnap.id) ||
-          docSnap.id.startsWith('archive-post-') ||
-          docSnap.id.startsWith('post-')
-        ) {
+        if (placeholderIds.has(docSnap.id) || docSnap.id.startsWith('archive-post-')) {
           await deleteDoc(docSnap.ref).catch(() => {});
         }
       }

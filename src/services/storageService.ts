@@ -1,5 +1,6 @@
 import { Post, User, Comment, ChatMessage, QuotaStats } from '../types';
 import { INITIAL_POSTS, INITIAL_USERS } from '../data/initialData';
+import { generateInitialsAvatar } from '../utils/avatarUtils';
 
 const POSTS_STORAGE_KEY = 'enterprise_network_posts_clean_v3';
 const USERS_STORAGE_KEY = 'enterprise_network_users_v2';
@@ -20,16 +21,24 @@ export class StorageService {
       'hendra_eng', 'agus_staff', 'linda_admin', 'siti_hr'
     ]);
 
-    // Purge demo users from storage and keep only real registered users
+    // Purge demo users and replace any legacy Unsplash placeholder avatars with clean initials
     try {
       const rawUsers = localStorage.getItem(USERS_STORAGE_KEY);
       if (rawUsers) {
         const users: User[] = JSON.parse(rawUsers);
-        const filteredUsers = users.filter((u) => {
-          const isDemoName = demoUsernames.has(u.username?.toLowerCase());
-          const isDemoId = typeof u.id === 'string' && /^usr-[1-8]$/.test(u.id);
-          return !isDemoName && !isDemoId;
-        });
+        const filteredUsers = users
+          .filter((u) => {
+            const isDemoName = demoUsernames.has(u.username?.toLowerCase());
+            const isDemoId = typeof u.id === 'string' && /^usr-[1-8]$/.test(u.id);
+            return !isDemoName && !isDemoId;
+          })
+          .map((u) => {
+            // Replace unsplash placeholder with clean initials avatar
+            if (!u.avatar || u.avatar.includes('images.unsplash.com')) {
+              u.avatar = generateInitialsAvatar(u.fullName, u.department);
+            }
+            return u;
+          });
         localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(filteredUsers));
       } else {
         localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify([]));
@@ -45,6 +54,35 @@ export class StorageService {
         const curr = JSON.parse(currentRaw);
         if (demoUsernames.has(curr.username?.toLowerCase()) || (typeof curr.id === 'string' && /^usr-[1-8]$/.test(curr.id))) {
           localStorage.removeItem('enterprise_network_current_user_v1');
+        } else if (!curr.avatar || curr.avatar.includes('images.unsplash.com')) {
+          curr.avatar = generateInitialsAvatar(curr.fullName, curr.department);
+          localStorage.setItem('enterprise_network_current_user_v1', JSON.stringify(curr));
+        }
+      }
+    } catch {}
+
+    // Clean up any placeholder avatars in posts and comments
+    try {
+      const rawPosts = localStorage.getItem(POSTS_STORAGE_KEY);
+      if (rawPosts) {
+        const parsed: Post[] = JSON.parse(rawPosts);
+        let changed = false;
+        parsed.forEach((p) => {
+          if (!p.authorAvatar || p.authorAvatar.includes('images.unsplash.com')) {
+            p.authorAvatar = generateInitialsAvatar(p.authorName, p.authorDepartment);
+            changed = true;
+          }
+          if (Array.isArray(p.comments)) {
+            p.comments.forEach((c) => {
+              if (!c.authorAvatar || c.authorAvatar.includes('images.unsplash.com')) {
+                c.authorAvatar = generateInitialsAvatar(c.authorName, c.authorDepartment);
+                changed = true;
+              }
+            });
+          }
+        });
+        if (changed) {
+          localStorage.setItem(POSTS_STORAGE_KEY, JSON.stringify(parsed));
         }
       }
     } catch {}
@@ -228,14 +266,60 @@ export class StorageService {
   }
 
   static updateUserBio(userId: string, bio: string): User {
+    return this.updateUserProfile(userId, { bio });
+  }
+
+  static updateUserProfile(
+    userId: string,
+    updates: Partial<Pick<User, 'fullName' | 'avatar' | 'bio' | 'department' | 'role'>>
+  ): User {
     const users = this.getUsers();
     const userIndex = users.findIndex((u) => u.id === userId);
     if (userIndex === -1) {
       throw new Error('Pengguna tidak ditemukan.');
     }
-    users[userIndex].bio = bio;
+
+    const updated = {
+      ...users[userIndex],
+      ...updates,
+    };
+    users[userIndex] = updated;
     localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-    return users[userIndex];
+
+    // Also update active session if it matches this user
+    try {
+      const currRaw = localStorage.getItem('enterprise_network_current_user_v1');
+      if (currRaw) {
+        const curr: User = JSON.parse(currRaw);
+        if (curr.id === userId) {
+          localStorage.setItem('enterprise_network_current_user_v1', JSON.stringify(updated));
+        }
+      }
+    } catch {}
+
+    // Update avatar and authorName on user's local posts so feed is immediately in sync
+    try {
+      const posts = this.getPosts();
+      let changed = false;
+      const updatedPosts = posts.map((p) => {
+        if (p.authorId === userId || p.authorUsername.toLowerCase() === updated.username.toLowerCase()) {
+          changed = true;
+          return {
+            ...p,
+            authorName: updates.fullName || p.authorName,
+            authorAvatar: updates.avatar || p.authorAvatar,
+            authorDepartment: updates.department || p.authorDepartment,
+            authorRole: updates.role || p.authorRole,
+          };
+        }
+        return p;
+      });
+      if (changed) {
+        localStorage.setItem(POSTS_STORAGE_KEY, JSON.stringify(updatedPosts));
+      }
+    } catch {}
+
+    return updated;
   }
 
   // FIREBASE QUOTA SAVER ENGINE

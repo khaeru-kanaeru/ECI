@@ -1,7 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Department } from '../types';
-import { X, Lock, User as UserIcon, Building2, Briefcase, KeyRound, Sparkles, CheckCircle2, AlertCircle, ArrowRight } from 'lucide-react';
+import {
+  X,
+  Lock,
+  User as UserIcon,
+  Building2,
+  Briefcase,
+  KeyRound,
+  Sparkles,
+  CheckCircle2,
+  AlertCircle,
+  ArrowRight,
+  Camera,
+  Trash2
+} from 'lucide-react';
+import { generateInitialsAvatar, compressAndReadImage } from '../utils/avatarUtils';
 
 const DEPARTMENTS: Department[] = [
   'Produksi Export',
@@ -38,6 +52,8 @@ export const AuthModal: React.FC = () => {
   const [signupRole, setSignupRole] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
+  const [signupAvatar, setSignupAvatar] = useState<string>('');
+  const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
 
   // Reset password form
   const [resetUsername, setResetUsername] = useState('');
@@ -74,6 +90,33 @@ export const AuthModal: React.FC = () => {
     }
   };
 
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setErrorMessage('Format file harus berupa gambar (JPG, PNG, WEBP).');
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      setErrorMessage('Ukuran file foto maksimal 8 MB.');
+      return;
+    }
+
+    setIsProcessingAvatar(true);
+    setErrorMessage('');
+    try {
+      const dataUrl = await compressAndReadImage(file, 360, 0.85);
+      setSignupAvatar(dataUrl);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Gagal memproses file foto.');
+    } finally {
+      setIsProcessingAvatar(false);
+      e.target.value = '';
+    }
+  };
+
   const handleSignup = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -101,6 +144,7 @@ export const AuthModal: React.FC = () => {
       username: signupUsername,
       department: signupDepartment,
       role: signupRole || `Spesialis ${signupDepartment}`,
+      avatar: signupAvatar || undefined,
       password: signupPassword,
     });
 
@@ -283,6 +327,73 @@ export const AuthModal: React.FC = () => {
           {/* TAB 2: SIGNUP */}
           {activeTab === 'signup' && (
             <form onSubmit={handleSignup} className="space-y-2.5">
+              {/* Profile Photo Upload / Initials Indicator */}
+              <div className="bg-zinc-50 border border-zinc-200/80 rounded-xl p-3 flex items-center gap-3">
+                <div className="relative shrink-0">
+                  <img
+                    src={signupAvatar || generateInitialsAvatar(signupFullName || 'Karyawan Baru', signupDepartment)}
+                    alt="Preview Foto Profil"
+                    className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-xs ring-2 ring-zinc-200"
+                  />
+                  {signupAvatar && (
+                    <button
+                      type="button"
+                      onClick={() => setSignupAvatar('')}
+                      className="absolute -top-1 -right-1 w-5 h-5 bg-rose-600 hover:bg-rose-700 text-white rounded-full flex items-center justify-center shadow-xs transition-colors cursor-pointer"
+                      title="Hapus foto dan gunakan inisial"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-zinc-900">
+                      Foto Profil (Opsional)
+                    </span>
+                    {signupAvatar ? (
+                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        Foto Dipilih
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full border border-zinc-200">
+                        Inisial Otomatis
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-zinc-500 mt-0.5 leading-snug">
+                    {signupAvatar
+                      ? 'Foto profil kustom Anda siap disimpan.'
+                      : 'Cukup inisial nama tanpa foto placeholder bila akun baru dibuat.'}
+                  </p>
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <label className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white hover:bg-zinc-100 border border-zinc-300 text-zinc-700 rounded-lg text-[11px] font-semibold shadow-2xs transition-colors cursor-pointer">
+                      <Camera className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>{isProcessingAvatar ? 'Memproses...' : signupAvatar ? 'Ganti Foto' : 'Unggah Foto'}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/jpg"
+                        onChange={handleAvatarFileChange}
+                        disabled={isProcessingAvatar}
+                        className="hidden"
+                      />
+                    </label>
+
+                    {signupAvatar && (
+                      <button
+                        type="button"
+                        onClick={() => setSignupAvatar('')}
+                        className="text-[11px] font-medium text-zinc-500 hover:text-rose-600 transition-colors cursor-pointer"
+                      >
+                        Gunakan Inisial
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-zinc-700 mb-1">
                   Nama Lengkap

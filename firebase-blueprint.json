@@ -62,6 +62,23 @@
         "mentions": { "type": "array", "description": "Mentioned usernames" }
       },
       "required": ["id", "postId", "authorId", "authorName", "content", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Direct message between workplace colleagues",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message ID" },
+        "senderId": { "type": "string", "description": "Sender user ID" },
+        "senderUsername": { "type": "string", "description": "Sender username" },
+        "senderName": { "type": "string", "description": "Sender display name" },
+        "recipientId": { "type": "string", "description": "Recipient user ID" },
+        "recipientUsername": { "type": "string", "description": "Recipient username" },
+        "content": { "type": "string", "description": "Message body" },
+        "timestamp": { "type": "number", "description": "Timestamp in ms" },
+        "isRead": { "type": "boolean", "description": "Read receipt status" }
+      },
+      "required": ["id", "senderId", "senderUsername", "senderName", "recipientId", "recipientUsername", "content", "timestamp"]
     }
   },
   "firestore": {
@@ -76,6 +93,10 @@
     "/posts/{postId}/comments/{commentId}": {
       "schema": "Comment",
       "description": "Comments on posts"
+    },
+    "/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Direct workplace chat messages"
     }
   }
 }

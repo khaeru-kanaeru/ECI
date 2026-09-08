@@ -21,8 +21,12 @@ import {
   AlertTriangle,
   Info,
   ShieldCheck,
-  Share2
+  Share2,
+  Camera,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
+import { generateInitialsAvatar, compressAndReadImage } from '../utils/avatarUtils';
 
 interface MyProfileModalProps {
   isOpen: boolean;
@@ -45,12 +49,14 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
   onOpenCreatePost,
   onTagClick,
 }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, updateProfile } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
   const [isEditingBio, setIsEditingBio] = useState(false);
   const [bioText, setBioText] = useState(currentUser?.bio || '');
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [photoNotice, setPhotoNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Keep bioText synced if user changes
   React.useEffect(() => {
@@ -58,6 +64,49 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
       setBioText(currentUser.bio);
     }
   }, [currentUser]);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setPhotoNotice({ type: 'error', message: 'Format file harus gambar (JPG, PNG, WEBP).' });
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      setPhotoNotice({ type: 'error', message: 'Ukuran file maksimal 8 MB.' });
+      return;
+    }
+
+    setIsUploadingPhoto(true);
+    setPhotoNotice(null);
+    try {
+      const dataUrl = await compressAndReadImage(file, 400, 0.88);
+      const res = updateProfile({ avatar: dataUrl });
+      if (res.success) {
+        setPhotoNotice({ type: 'success', message: 'Foto profil berhasil diperbarui.' });
+        setTimeout(() => setPhotoNotice(null), 3500);
+      } else {
+        setPhotoNotice({ type: 'error', message: res.error || 'Gagal menyimpan foto profil.' });
+      }
+    } catch (err: any) {
+      setPhotoNotice({ type: 'error', message: err.message || 'Gagal memproses foto.' });
+    } finally {
+      setIsUploadingPhoto(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleResetToInitials = () => {
+    if (!currentUser) return;
+    const initialsAvatar = generateInitialsAvatar(currentUser.fullName, currentUser.department);
+    const res = updateProfile({ avatar: initialsAvatar });
+    if (res.success) {
+      setPhotoNotice({ type: 'success', message: 'Foto profil diganti menggunakan inisial nama.' });
+      setTimeout(() => setPhotoNotice(null), 3500);
+    }
+  };
 
   // Filter posts uploaded by current user
   const myPosts = useMemo(() => {
@@ -106,6 +155,7 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
     try {
       StorageService.updateUserBio(currentUser.id, bioText.trim());
       currentUser.bio = bioText.trim();
+      updateProfile({ bio: bioText.trim() });
     } catch {
       // ignore
     }
@@ -152,13 +202,29 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
           <div className="bg-white rounded-2xl border border-[#dddfe2] p-5 shadow-xs">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <div className="relative">
+                <div className="relative group shrink-0">
                   <img
                     src={currentUser.avatar}
                     alt={currentUser.fullName}
                     className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover ring-4 ring-[#1877F2]/20 border-2 border-white shadow-md"
                   />
                   <span className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-emerald-500 ring-2 ring-white" title="Online" />
+
+                  {/* Hover Camera Overlay */}
+                  <label
+                    className="absolute inset-0 rounded-full bg-black/45 text-white flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-[10px] font-semibold"
+                    title="Klik untuk ganti foto profil"
+                  >
+                    <Camera className="w-4 h-4 mb-0.5" />
+                    <span>Ubah Foto</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/jpg"
+                      onChange={handlePhotoUpload}
+                      disabled={isUploadingPhoto}
+                      className="hidden"
+                    />
+                  </label>
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -182,6 +248,33 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
                       Bergabung {formattedJoinDate}
                     </span>
                   </div>
+
+                  {/* Photo Actions */}
+                  <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+                    <label className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white hover:bg-zinc-50 border border-zinc-300 text-zinc-700 text-xs font-semibold rounded-lg shadow-2xs cursor-pointer transition-colors">
+                      <Camera className="w-3.5 h-3.5 text-[#1877F2]" />
+                      <span>{isUploadingPhoto ? 'Mengunggah...' : 'Ganti Foto Profil'}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/jpg"
+                        onChange={handlePhotoUpload}
+                        disabled={isUploadingPhoto}
+                        className="hidden"
+                      />
+                    </label>
+
+                    {!currentUser.avatar.startsWith('data:image/svg+xml') && (
+                      <button
+                        type="button"
+                        onClick={handleResetToInitials}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                        title="Hapus foto kustom dan gunakan inisial nama"
+                      >
+                        <RefreshCw className="w-3 h-3 text-zinc-500" />
+                        <span>Gunakan Inisial Nama</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -198,6 +291,29 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
                 <span>Buat Postingan Baru</span>
               </button>
             </div>
+
+            {/* Photo upload status notification */}
+            {photoNotice && (
+              <div
+                className={`mt-3 p-2.5 rounded-lg text-xs flex items-center justify-between gap-2 border ${
+                  photoNotice.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-rose-50 text-rose-800 border-rose-200'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{photoNotice.message}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPhotoNotice(null)}
+                  className="text-zinc-500 hover:text-zinc-800 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Bio Section */}
             <div className="mt-4 pt-4 border-t border-zinc-100">

@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Department } from '../types';
 import { StorageService } from '../services/storageService';
+import { FirestoreService } from '../services/firestoreService';
+import { generateInitialsAvatar } from '../utils/avatarUtils';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -16,8 +18,10 @@ interface AuthContextType {
     username: string;
     department: Department;
     role: string;
+    avatar?: string;
     password?: string;
   }) => { success: boolean; error?: string };
+  updateProfile: (updates: Partial<Pick<User, 'fullName' | 'avatar' | 'bio' | 'department' | 'role'>>) => { success: boolean; error?: string };
   resetPassword: (username: string, newPassword: string) => { success: boolean; error?: string };
   logout: () => void;
   switchUser: (userId: string) => void;
@@ -64,6 +68,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(null);
       localStorage.removeItem(CURRENT_USER_KEY);
     }
+
+    // Subscribe to cloud Firestore users to keep accounts in sync across devices
+    const unsubscribeUsers = FirestoreService.subscribeToUsers((cloudUsers) => {
+      cloudUsers.forEach((u) => {
+        try {
+          const existing = StorageService.getUserById(u.id);
+          if (!existing) {
+            StorageService.createUser(u);
+          } else {
+            StorageService.updateUserProfile(u.id, u);
+          }
+        } catch {
+          // ignore
+        }
+      });
+      refreshUsers();
+    });
+
+    // Auto sync any local posts and users into Firestore
+    FirestoreService.syncLocalDataToFirestore().catch(() => {});
+
+    return () => {
+      unsubscribeUsers();
+    };
   }, []);
 
   const openAuthModal = (
@@ -108,6 +136,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     username: string;
     department: Department;
     role: string;
+    avatar?: string;
     password?: string;
   }): { success: boolean; error?: string } => {
     const cleanUsername = data.username.trim().replace(/^@/, '').toLowerCase();
@@ -122,15 +151,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: 'Nama lengkap wajib diisi.' };
     }
 
-    const defaultAvatars = [
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
-    ];
-    const randomAvatar = defaultAvatars[Math.floor(Math.random() * defaultAvatars.length)];
+    // Use uploaded photo if provided, otherwise generate clean SVG initials avatar (NO placeholder photos!)
+    const chosenAvatar = (data.avatar && data.avatar.trim())
+      ? data.avatar.trim()
+      : generateInitialsAvatar(data.fullName.trim(), data.department);
 
     const newUser: User = {
       id: `usr-${Date.now()}`,
@@ -138,7 +162,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fullName: data.fullName.trim(),
       department: data.department,
       role: data.role.trim() || 'Staf ' + data.department,
-      avatar: randomAvatar,
+      avatar: chosenAvatar,
       password: data.password || 'password123',
       joinedAt: Date.now(),
       isOnline: true,
@@ -151,9 +175,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(created));
       refreshUsers();
       closeAuthModal();
+      // Sync new user to cloud Firestore
+      FirestoreService.saveUser(created).catch(() => {});
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Gagal membuat akun.' };
+    }
+  };
+
+  const updateProfile = (
+    updates: Partial<Pick<User, 'fullName' | 'avatar' | 'bio' | 'department' | 'role'>>
+  ): { success: boolean; error?: string } => {
+    if (!currentUser) {
+      return { success: false, error: 'Sesi akun tidak aktif.' };
+    }
+    try {
+      const updated = StorageService.updateUserProfile(currentUser.id, updates);
+      setCurrentUser(updated);
+      refreshUsers();
+      // Sync profile update to cloud Firestore
+      FirestoreService.saveUser(updated).catch(() => {});
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Gagal memperbarui profil.' };
     }
   };
 
@@ -175,6 +219,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(updatedUser));
       }
       refreshUsers();
+      // Sync password update to cloud Firestore
+      FirestoreService.saveUser(updatedUser).catch(() => {});
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Gagal mereset kata sandi.' };
@@ -215,6 +261,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         closeAuthModal,
         login,
         signup,
+        updateProfile,
         resetPassword,
         logout,
         switchUser,
