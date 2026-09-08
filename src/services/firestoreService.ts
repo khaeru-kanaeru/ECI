@@ -16,6 +16,23 @@ import { Post, Comment } from '../types';
 const POSTS_COLLECTION = 'posts';
 const LOCAL_POSTS_CACHE_KEY = 'workplace_firebase_posts_cache_v3';
 
+/**
+ * Strips all undefined fields recursively so Firestore setDoc / updateDoc
+ * will never fail with "Unsupported field value: undefined".
+ */
+export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) continue;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = sanitizeForFirestore(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 export class FirestoreService {
   /**
    * Real-time subscription to feed posts ordered by creation time
@@ -32,7 +49,7 @@ export class FirestoreService {
         const posts: Post[] = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as Post;
-          // Filter out legacy placeholder IDs
+          // Filter out ONLY exact legacy dummy IDs
           if (
             ['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(docSnap.id) ||
             docSnap.id.startsWith('archive-post-')
@@ -56,7 +73,7 @@ export class FirestoreService {
           });
         });
 
-        // Cache locally for instant loading
+        // Cache locally for instant loading on page refresh
         try {
           localStorage.setItem(LOCAL_POSTS_CACHE_KEY, JSON.stringify(posts));
         } catch {
@@ -104,25 +121,30 @@ export class FirestoreService {
     // 1. Immediately persist locally
     try {
       StorageService.savePost(post);
+      const current = this.getCachedPosts();
+      const updated = [post, ...current.filter((p) => p.id !== post.id)];
+      localStorage.setItem(LOCAL_POSTS_CACHE_KEY, JSON.stringify(updated));
     } catch (e) {
       console.warn('Local save warning:', e);
     }
 
-    // 2. Sync to cloud Firestore
+    // 2. Sync to cloud Firestore with sanitized fields
     try {
       const postRef = doc(db, POSTS_COLLECTION, post.id);
-      await setDoc(postRef, {
+      const cleanData = sanitizeForFirestore({
         ...post,
         imageUrls: post.imageUrls || (post.imageUrl ? [post.imageUrl] : []),
         createdAt: post.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
+      await setDoc(postRef, cleanData);
     } catch (error) {
-      console.warn('Firestore createPost cloud sync error:', (error as any)?.message);
+      console.error('Firestore createPost cloud sync error:', error);
       try {
         handleFirestoreError(error, OperationType.CREATE, `${POSTS_COLLECTION}/${post.id}`);
       } catch {
-        // Handled: local store already updated
+        // Re-throw so caller can know if cloud failed
+        throw error;
       }
     }
   }
@@ -182,16 +204,18 @@ export class FirestoreService {
     // 2. Cloud update
     try {
       const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
-      await setDoc(commentRef, comment);
+      const cleanComment = sanitizeForFirestore(comment);
+      await setDoc(commentRef, cleanComment);
 
+      const postRef = doc(db, POSTS_COLLECTION, postId);
       const snapshot = await getDocs(query(collection(db, POSTS_COLLECTION)));
       const postDoc = snapshot.docs.find((d) => d.id === postId);
       if (postDoc) {
         const data = postDoc.data() as Post;
         const currentComments = data.comments || [];
-        const updatedComments = [...currentComments, comment];
+        const updatedComments = [...currentComments, cleanComment as Comment];
 
-        await updateDoc(doc(db, POSTS_COLLECTION, postId), {
+        await updateDoc(postRef, {
           comments: updatedComments,
           commentsCount: updatedComments.length,
           updatedAt: Date.now(),
@@ -214,6 +238,9 @@ export class FirestoreService {
     // 1. Local update
     try {
       StorageService.deletePost(postId);
+      const current = this.getCachedPosts();
+      const updated = current.filter((p) => p.id !== postId);
+      localStorage.setItem(LOCAL_POSTS_CACHE_KEY, JSON.stringify(updated));
     } catch (e) {
       console.warn('Local deletePost warning:', e);
     }
@@ -233,29 +260,33 @@ export class FirestoreService {
 
   /**
    * Clean up any legacy placeholder posts from Firestore and LocalStorage
+   * NEVER deletes real user posts!
    */
   static async cleanLegacyPlaceholders(): Promise<void> {
-    // 1. Clear legacy localStorage keys
+    // 1. Clear obsolete legacy keys (NEVER clear LOCAL_POSTS_CACHE_KEY!)
     const keysToRemove = [
       'enterprise_network_posts_v2',
       'enterprise_network_posts_v1',
       'enterprise_network_posts_clean_v1',
       'workplace_posts_v1',
-      'workplace_firebase_posts_cache_v3',
-      'workplace_firebase_posts_cache_v2',
     ];
     keysToRemove.forEach((k) => localStorage.removeItem(k));
 
-    // 2. Query Firestore and remove any leftover placeholder posts
+    // 2. Query Firestore and remove ONLY specific dummy IDs
     try {
       const snap = await getDocs(collection(db, POSTS_COLLECTION));
-      const placeholderIds = ['post-1', 'post-2', 'post-3', 'post-4', 'post-5'];
+      const placeholderIds = new Set([
+        'post-1',
+        'post-2',
+        'post-3',
+        'post-4',
+        'post-5',
+        'archive-post-1',
+        'archive-post-2',
+        'archive-post-3',
+      ]);
       for (const docSnap of snap.docs) {
-        if (
-          placeholderIds.includes(docSnap.id) ||
-          docSnap.id.startsWith('archive-post-') ||
-          docSnap.id.startsWith('post-')
-        ) {
+        if (placeholderIds.has(docSnap.id) || docSnap.id.startsWith('archive-post-')) {
           await deleteDoc(docSnap.ref).catch(() => {});
         }
       }
