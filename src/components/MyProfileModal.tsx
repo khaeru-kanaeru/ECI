@@ -155,6 +155,7 @@ export const MyProfileModal: React.FC<MyProfileModalProps> = ({
     try {
       StorageService.updateUserBio(currentUser.id, bioText.trim());
       currentUser.bio = bioText.trim();
+      updateProfile({ bio: bioText.trim() });
     } catch {
       // ignore
     }

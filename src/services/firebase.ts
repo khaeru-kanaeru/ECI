@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -11,6 +11,38 @@ export const db = dbId && dbId !== '(default)' && dbId !== ''
   ? getFirestore(app, dbId)
   : getFirestore(app);
 export const auth = getAuth(app);
+
+let authInitPromise: Promise<FirebaseUser | null> | null = null;
+
+/**
+ * Ensure Firebase client has an active authenticated session
+ * to satisfy Firestore security rules.
+ */
+export function ensureFirebaseAuth(): Promise<FirebaseUser | null> {
+  if (auth.currentUser) {
+    return Promise.resolve(auth.currentUser);
+  }
+  if (!authInitPromise) {
+    authInitPromise = new Promise((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        if (user) {
+          unsubscribe();
+          resolve(user);
+        }
+      });
+      signInAnonymously(auth)
+        .then((cred) => resolve(cred.user))
+        .catch((err) => {
+          console.warn('Firebase anonymous auth warning:', err);
+          resolve(null);
+        });
+    });
+  }
+  return authInitPromise;
+}
+
+// Automatically ensure auth session on application boot
+ensureFirebaseAuth().catch(() => {});
 
 export enum OperationType {
   CREATE = 'create',

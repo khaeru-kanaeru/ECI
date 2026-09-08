@@ -23,6 +23,12 @@ service cloud.firestore {
       }
     }
 
+    // Direct workplace chat messages
+    match /messages/{messageId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // Default rule for other collections
     match /{document=**} {
       allow read, write: if false;

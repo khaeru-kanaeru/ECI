@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Department } from '../types';
 import { StorageService } from '../services/storageService';
+import { FirestoreService } from '../services/firestoreService';
 import { generateInitialsAvatar } from '../utils/avatarUtils';
 
 interface AuthContextType {
@@ -67,6 +68,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(null);
       localStorage.removeItem(CURRENT_USER_KEY);
     }
+
+    // Subscribe to cloud Firestore users to keep accounts in sync across devices
+    const unsubscribeUsers = FirestoreService.subscribeToUsers((cloudUsers) => {
+      cloudUsers.forEach((u) => {
+        try {
+          const existing = StorageService.getUserById(u.id);
+          if (!existing) {
+            StorageService.createUser(u);
+          } else {
+            StorageService.updateUserProfile(u.id, u);
+          }
+        } catch {
+          // ignore
+        }
+      });
+      refreshUsers();
+    });
+
+    // Auto sync any local posts and users into Firestore
+    FirestoreService.syncLocalDataToFirestore().catch(() => {});
+
+    return () => {
+      unsubscribeUsers();
+    };
   }, []);
 
   const openAuthModal = (
@@ -150,6 +175,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(created));
       refreshUsers();
       closeAuthModal();
+      // Sync new user to cloud Firestore
+      FirestoreService.saveUser(created).catch(() => {});
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Gagal membuat akun.' };
@@ -190,6 +217,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(updatedUser));
       }
       refreshUsers();
+      // Sync password update to cloud Firestore
+      FirestoreService.saveUser(updatedUser).catch(() => {});
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Gagal mereset kata sandi.' };

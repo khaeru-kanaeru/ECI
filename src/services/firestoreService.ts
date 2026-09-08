@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
@@ -9,11 +10,13 @@ import {
   orderBy,
   getDocs,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { db, handleFirestoreError, OperationType, ensureFirebaseAuth } from './firebase';
 import { StorageService } from './storageService';
-import { Post, Comment } from '../types';
+import { Post, Comment, User, ChatMessage } from '../types';
 
 const POSTS_COLLECTION = 'posts';
+const USERS_COLLECTION = 'users';
+const MESSAGES_COLLECTION = 'messages';
 const LOCAL_POSTS_CACHE_KEY = 'workplace_firebase_posts_cache_v3';
 
 /**
@@ -41,6 +44,8 @@ export class FirestoreService {
     onPostsUpdate: (posts: Post[]) => void,
     onError?: (error: any) => void
   ): () => void {
+    ensureFirebaseAuth().catch(() => {});
+
     const postsQuery = query(collection(db, POSTS_COLLECTION), orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(
@@ -54,7 +59,6 @@ export class FirestoreService {
             ['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(docSnap.id) ||
             docSnap.id.startsWith('archive-post-')
           ) {
-            // Delete legacy placeholder document in the background
             deleteDoc(docSnap.ref).catch(() => {});
             return;
           }
@@ -105,7 +109,6 @@ export class FirestoreService {
       const cached = localStorage.getItem(LOCAL_POSTS_CACHE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        // Filter out any legacy placeholder posts if they linger in local storage
         return parsed.filter((p: Post) => !['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id));
       }
     } catch {
@@ -129,6 +132,10 @@ export class FirestoreService {
     }
 
     // 2. Sync to cloud Firestore with sanitized fields
+    // 2. Ensure Firebase authentication is established
+    await ensureFirebaseAuth();
+
+    // 3. Sync to cloud Firestore with sanitized fields
     try {
       const postRef = doc(db, POSTS_COLLECTION, post.id);
       const cleanData = sanitizeForFirestore({
@@ -162,12 +169,12 @@ export class FirestoreService {
 
     // 2. Cloud update
     try {
+      await ensureFirebaseAuth();
       const postRef = doc(db, POSTS_COLLECTION, postId);
-      const snapshot = await getDocs(query(collection(db, POSTS_COLLECTION)));
-      const postDoc = snapshot.docs.find((d) => d.id === postId);
-      if (!postDoc) return;
+      const postSnap = await getDoc(postRef);
+      if (!postSnap.exists()) return;
 
-      const data = postDoc.data() as Post;
+      const data = postSnap.data() as Post;
       const upvotedBy: string[] = data.upvotedBy || [];
       const hasUpvoted = upvotedBy.includes(userId);
 
@@ -203,6 +210,8 @@ export class FirestoreService {
 
     // 2. Cloud update
     try {
+      await ensureFirebaseAuth();
+      const cleanComment = sanitizeForFirestore(comment);
       const commentRef = doc(db, POSTS_COLLECTION, postId, 'comments', comment.id);
       const cleanComment = sanitizeForFirestore(comment);
       await setDoc(commentRef, cleanComment);
@@ -212,6 +221,12 @@ export class FirestoreService {
       const postDoc = snapshot.docs.find((d) => d.id === postId);
       if (postDoc) {
         const data = postDoc.data() as Post;
+      await setDoc(commentRef, cleanComment);
+
+      const postRef = doc(db, POSTS_COLLECTION, postId);
+      const postSnap = await getDoc(postRef);
+      if (postSnap.exists()) {
+        const data = postSnap.data() as Post;
         const currentComments = data.comments || [];
         const updatedComments = [...currentComments, cleanComment as Comment];
 
@@ -247,6 +262,7 @@ export class FirestoreService {
 
     // 2. Cloud update
     try {
+      await ensureFirebaseAuth();
       await deleteDoc(doc(db, POSTS_COLLECTION, postId));
     } catch (error) {
       console.warn('Firestore deletePost cloud sync error:', (error as any)?.message);
@@ -255,6 +271,130 @@ export class FirestoreService {
       } catch {
         // Handled
       }
+    }
+  }
+
+  /**
+   * Save or update employee user in Firestore
+   */
+  static async saveUser(user: User): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      const userRef = doc(db, USERS_COLLECTION, user.id);
+      const clean = sanitizeForFirestore(user);
+      await setDoc(userRef, clean, { merge: true });
+    } catch (error) {
+      console.warn('Firestore saveUser error:', error);
+    }
+  }
+
+  /**
+   * Real-time subscription to employee users collection
+   */
+  static subscribeToUsers(onUsersUpdate: (users: User[]) => void): () => void {
+    ensureFirebaseAuth().catch(() => {});
+
+    const usersQuery = query(collection(db, USERS_COLLECTION));
+    const unsubscribe = onSnapshot(
+      usersQuery,
+      (snapshot) => {
+        const cloudUsers: User[] = [];
+        snapshot.forEach((docSnap) => {
+          const u = docSnap.data() as User;
+          cloudUsers.push({ ...u, id: docSnap.id });
+        });
+        if (cloudUsers.length > 0) {
+          onUsersUpdate(cloudUsers);
+        }
+      },
+      (err) => {
+        console.warn('Firestore users subscription status:', err);
+      }
+    );
+
+    return unsubscribe;
+  }
+
+  /**
+   * Save a chat message in Firestore
+   */
+  static async saveChatMessage(msg: ChatMessage): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      const msgRef = doc(db, MESSAGES_COLLECTION, msg.id);
+      const clean = sanitizeForFirestore(msg);
+      await setDoc(msgRef, clean);
+    } catch (error) {
+      console.warn('Firestore saveChatMessage error:', error);
+    }
+  }
+
+  /**
+   * Subscribe to chat messages in Firestore between two users
+   */
+  static subscribeToChatMessages(
+    userId1: string,
+    userId2: string,
+    onMessagesUpdate: (msgs: ChatMessage[]) => void
+  ): () => void {
+    ensureFirebaseAuth().catch(() => {});
+
+    const msgsQuery = query(collection(db, MESSAGES_COLLECTION), orderBy('timestamp', 'asc'));
+    const unsubscribe = onSnapshot(
+      msgsQuery,
+      (snapshot) => {
+        const relevant: ChatMessage[] = [];
+        snapshot.forEach((docSnap) => {
+          const m = docSnap.data() as ChatMessage;
+          const isMatch =
+            (m.senderId === userId1 && m.recipientId === userId2) ||
+            (m.senderId === userId2 && m.recipientId === userId1);
+          if (isMatch) {
+            relevant.push({ ...m, id: docSnap.id });
+          }
+        });
+        if (relevant.length > 0) {
+          onMessagesUpdate(relevant);
+        }
+      },
+      (err) => {
+        console.warn('Firestore messages subscription status:', err);
+      }
+    );
+
+    return unsubscribe;
+  }
+
+  /**
+   * Sync existing local posts and users into Firestore so nothing is lost
+   */
+  static async syncLocalDataToFirestore(): Promise<void> {
+    try {
+      await ensureFirebaseAuth();
+      
+      // 1. Sync local posts
+      const localPosts = StorageService.getPosts();
+      for (const p of localPosts) {
+        if (!['post-1', 'post-2', 'post-3', 'post-4', 'post-5'].includes(p.id) && !p.id.startsWith('archive-post-')) {
+          const ref = doc(db, POSTS_COLLECTION, p.id);
+          const snap = await getDoc(ref);
+          if (!snap.exists()) {
+            await setDoc(ref, sanitizeForFirestore(p));
+          }
+        }
+      }
+
+      // 2. Sync local users
+      const localUsers = StorageService.getUsers();
+      for (const u of localUsers) {
+        const uRef = doc(db, USERS_COLLECTION, u.id);
+        const uSnap = await getDoc(uRef);
+        if (!uSnap.exists()) {
+          await setDoc(uRef, sanitizeForFirestore(u));
+        }
+      }
+    } catch (e) {
+      console.warn('syncLocalDataToFirestore warning:', e);
     }
   }
 
@@ -274,6 +414,7 @@ export class FirestoreService {
 
     // 2. Query Firestore and remove ONLY specific dummy IDs
     try {
+      await ensureFirebaseAuth();
       const snap = await getDocs(collection(db, POSTS_COLLECTION));
       const placeholderIds = new Set([
         'post-1',
